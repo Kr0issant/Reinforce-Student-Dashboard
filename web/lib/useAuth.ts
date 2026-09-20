@@ -44,6 +44,7 @@ export function useAuth(): AuthState & { signOut: () => Promise<void> } {
   useEffect(() => {
     if (!isFirebaseConfigured) return;
 
+    let unsubscribe: (() => void) | undefined;
     let isCancelled = false;
 
     const watchdog = setTimeout(() => {
