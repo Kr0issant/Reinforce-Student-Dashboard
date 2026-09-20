@@ -1,6 +1,6 @@
 "use client";
 
-import { onAuthStateChanged, signOut as fbSignOut, type User } from "firebase/auth";
+import { getRedirectResult, onAuthStateChanged, signOut as fbSignOut, type User } from "firebase/auth";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getFirebaseAuth, isFirebaseConfigured } from "./firebase";
 
@@ -59,10 +59,29 @@ export function useAuth(): AuthState & { signOut: () => Promise<void> } {
     };
 
     try {
+      const auth = getFirebaseAuth();
+
+      // Check for incoming redirect result first (for redirect login on Firefox, Zen, Opera, Safari, Mobile)
+      getRedirectResult(auth)
+        .then(async (credential) => {
+          if (credential?.user) {
+            try {
+              const token = await credential.user.getIdToken();
+              settle({ user: credential.user, token });
+            } catch {
+              settle({ user: credential.user, token: null, degraded: true });
+            }
+          }
+        })
+        .catch((err) => {
+          console.warn("[useAuth] Redirect check error:", err);
+        });
+
       unsubscribe = onAuthStateChanged(
-        getFirebaseAuth(),
+        auth,
         async (user) => {
           if (!user) {
+            // Only settle null if no user is found
             settle({ user: null, token: null });
             return;
           }
