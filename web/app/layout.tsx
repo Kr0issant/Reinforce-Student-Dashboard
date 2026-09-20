@@ -18,8 +18,14 @@ const sans = Plus_Jakarta_Sans({
   display: "swap",
 });
 
+const SITE_URL =
+  process.env.NEXT_PUBLIC_SITE_URL ??
+  (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://localhost:3000");
+
 export const metadata: Metadata = {
-  metadataBase: new URL("https://reinforce-student-dashboard.vercel.app"),
+  // Env-driven so this does not go stale when the site is renamed. Vercel
+  // provides VERCEL_URL automatically for preview deployments.
+  metadataBase: new URL(SITE_URL),
   title: {
     default: "Reinforce — the AI/ML club at SST",
     template: "%s · Reinforce",
