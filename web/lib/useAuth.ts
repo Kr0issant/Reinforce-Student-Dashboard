@@ -1,6 +1,12 @@
 "use client";
 
-import { getRedirectResult, onIdTokenChanged ,onAuthStateChanged, signOut as fbSignOut, type User } from "firebase/auth";
+import {
+  getRedirectResult,
+  onAuthStateChanged,
+  signOut as fbSignOut,
+  type Auth,
+  type User,
+} from "firebase/auth";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getFirebaseAuth, isFirebaseConfigured } from "./firebase";
 
@@ -45,8 +51,7 @@ export function useAuth(): AuthState & { signOut: () => Promise<void> } {
     if (!isFirebaseConfigured) return;
 
     let unsubscribe: (() => void) | undefined;
-
-    let isCancelled = false;
+    let cancelled = false;
 
     const watchdog = setTimeout(() => {
       if (settled.current) return;
@@ -55,65 +60,61 @@ export function useAuth(): AuthState & { signOut: () => Promise<void> } {
     }, AUTH_TIMEOUT_MS);
 
     const settle = (next: Partial<AuthState>) => {
+      if (cancelled) return;
       settled.current = true;
       clearTimeout(watchdog);
-      if (!isCancelled) {
-        setState((prev) => ({ ...prev, loading: false, degraded: false, ...next }));
+      setState((prev) => ({ ...prev, loading: false, degraded: false, ...next }));
+    };
+
+    const publish = async (user: User | null) => {
+      if (!user) {
+        settle({ user: null, token: null });
+        return;
+      }
+      try {
+        const token = await user.getIdToken();
+        settle({ user, token });
+      } catch {
+        // Signed in but the token could not be minted — treat as signed out
+        // rather than leaving the caller with a user and no credential.
+        settle({ user: null, token: null, degraded: true });
       }
     };
 
-    const initAuth = async () => {
-      try {
-        const auth = getFirebaseAuth();
-
-      // Check for incoming redirect result first (for redirect login on Firefox, Zen, Opera, Safari, Mobile)
-      getRedirectResult(auth)
-        .then(async (credential) => {
-          if (credential?.user) {
-            try {
-              const token = await credential.user.getIdToken();
-              settle({ user: credential.user, token });
-            } catch {
-              settle({ user: credential.user, token: null, degraded: true });
-            }
-          }
-        })
-        .catch((err) => {
-          console.warn("[useAuth] Redirect check error:", err);
-        }).finally(()=>{
-
-          
-          
-          unsubscribe = onAuthStateChanged(
-            auth,
-            async (user) => {
-          if (!user) {
-            // Only settle null if no user is found
-            settle({ user: null, token: null });
-            return;
-          }
-          try {
-            const token = await user.getIdToken();
-            settle({ user, token });
-          } catch {
-            // Signed in but the token could not be minted — treat as signed out
-            // rather than leaving the caller with a user and no credential.
-            settle({ user: null, token: null, degraded: true });
-          }
-        },
-        () => settle({ user: null, token: null, degraded: true }),
+    const subscribe = (auth: Auth) => {
+      if (cancelled) return;
+      unsubscribe = onAuthStateChanged(auth, publish, () =>
+        settle({ user: null, token: null, degraded: true }),
       );
-    });
+    };
+
+    try {
+      const auth = getFirebaseAuth();
+
+      // A redirect sign-in lands back on the page with the credential still in
+      // flight. Resolving it before subscribing means the first callback below
+      // already carries the signed-in user instead of a spurious null.
+      //
+      // This must stay a .finally() chain, not an await: if getRedirectResult
+      // rejects — or never settles because a browser blocked the cross-origin
+      // storage the redirect flow depends on — we still have to subscribe, or
+      // nothing ever reports auth state and every browser looks signed out.
+      getRedirectResult(auth)
+        .catch(() => {
+          // A failed redirect is not a failed session. The listener is the
+          // source of truth; swallow this and let it speak.
+        })
+        .finally(() => subscribe(auth));
     } catch {
       settle({ user: null, token: null, degraded: true });
     }
 
     return () => {
-      isCancelled = true;
+      cancelled = true;
       clearTimeout(watchdog);
       unsubscribe?.();
     };
-  }}, []);
+  }, []);
 
   const signOut = useCallback(async () => {
     if (!isFirebaseConfigured) return;
