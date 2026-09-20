@@ -9,9 +9,14 @@ from app.api.v1.endpoints import auth, tickets
 settings = get_settings()
 app = FastAPI()
 
+origins = [
+    "http://localhost:3000",
+    "https://reinforce-student-dashboard-xi.vercel.app/",  # replace with your deployed Vercel domain
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=origins,
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
