@@ -26,3 +26,12 @@ app.add_middleware(
 )
 
 app.include_router(auth.router, prefix="/api/v1")
+
+@app.get("/")
+@app.head("/")
+async def root():
+    return {"status": "ok", "service": "Reinforce Student Dashboard API"}
+
+@app.get("/health")
+async def health():
+    return {"status": "healthy"}
