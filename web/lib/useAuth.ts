@@ -46,6 +46,8 @@ export function useAuth(): AuthState & { signOut: () => Promise<void> } {
 
     let unsubscribe: (() => void) | undefined;
 
+    let isCancelled = false;
+
     const watchdog = setTimeout(() => {
       if (settled.current) return;
       settled.current = true;
@@ -107,10 +109,11 @@ export function useAuth(): AuthState & { signOut: () => Promise<void> } {
     }
 
     return () => {
+      isCancelled = true;
       clearTimeout(watchdog);
       unsubscribe?.();
     };
-  }, []);
+  }}, []);
 
   const signOut = useCallback(async () => {
     if (!isFirebaseConfigured) return;
