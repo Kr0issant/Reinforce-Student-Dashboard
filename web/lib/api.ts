@@ -145,6 +145,30 @@ export const api = {
     }),
 
   myTickets: (token: string) => request<TicketListResponse>("/tickets", token),
+
+  updateProfile: (token: string, body: ProfileUpdate) =>
+    request<{ success: boolean; message?: string; user: StudentProfile }>(
+      "/auth/profile",
+      token,
+      { method: "PUT", body: JSON.stringify(body) },
+    ),
+
+  unlinkDiscord: (token: string) =>
+    request<{ success: boolean; message?: string; user: StudentProfile }>(
+      "/auth/unlink-discord",
+      token,
+      { method: "POST" },
+    ),
+};
+
+/**
+ * The API replaces social_links wholesale rather than merging, so every key
+ * must be sent every time — omitting one clears it.
+ */
+export type ProfileUpdate = {
+  skills?: string[];
+  social_links?: SocialLinks;
+  full_name?: string;
 };
 
 /* ---------------------------------------------------------------- display */

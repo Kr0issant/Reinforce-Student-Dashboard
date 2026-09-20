@@ -110,6 +110,7 @@ export default function DashboardClient() {
               </h1>
             </div>
             <div className={styles.headActions}>
+              <Pill href="/profile">Edit profile</Pill>
               <Pill href="/">Back to the site</Pill>
               <Pill onClick={signOut}>Sign out</Pill>
             </div>
