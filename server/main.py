@@ -9,9 +9,13 @@ from app.api.v1.endpoints import auth, tickets
 settings = get_settings()
 app = FastAPI()
 
+# A browser Origin header is scheme://host[:port] with no path and no trailing
+# slash, and Starlette matches these by exact string. An entry written with a
+# trailing slash silently never matches, so CORS fails for that site.
 origins = [
     "http://localhost:3000",
-    "https://reinforce-student-dashboard-xi.vercel.app/",  # replace with your deployed Vercel domain
+    "https://reinforce-student-dashboard-xi.vercel.app",
+    "https://reinforce-student-dashboard.vercel.app",
 ]
 
 app.add_middleware(
