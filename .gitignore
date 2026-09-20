@@ -3,3 +3,4 @@ server/serviceAccountKey.json
 
 *.pyc
 __pycache__/
+# server\app\__pycache__\config.cpython-313.pyc
