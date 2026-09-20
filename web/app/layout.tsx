@@ -50,7 +50,19 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html lang="en" className={`${display.variable} ${sans.variable}`}>
-      <body>{children}</body>
+      {/*
+        suppressHydrationWarning is scoped to <body>'s own attributes and does
+        NOT extend to its children, so real hydration bugs inside the app still
+        surface.
+
+        Browser extensions routinely stamp attributes onto <body> before React
+        hydrates — Grammarly writes data-gr-ext-installed, Scholarcy writes
+        data-scholarcy-content-script-executed, and there are many more. The
+        server cannot know about them, so React reports a mismatch that no
+        change to our markup can fix. Without this, a member with a common
+        extension installed sees a hydration error overlay on every page.
+      */}
+      <body suppressHydrationWarning>{children}</body>
     </html>
   );
 }
