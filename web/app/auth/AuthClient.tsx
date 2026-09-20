@@ -1,6 +1,6 @@
 "use client";
 
-import { signInWithPopup, signInWithRedirect } from "firebase/auth";
+import { getRedirectResult, signInWithPopup, signInWithRedirect } from "firebase/auth";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -22,39 +22,26 @@ export default function AuthClient() {
   const discordId = raw && /^\d{5,25}$/.test(raw) ? raw : null;
   const malformed = Boolean(raw) && !discordId;
 
-  // Restore pending discord_id across full-page OAuth redirect
-  const [storedDiscordId, setStoredDiscordId] = useState<string | null>(null);
-  useEffect(() => {
-    try {
-      if (discordId) {
-        sessionStorage.setItem("pending_discord_id", discordId);
-      } else {
-        const saved = sessionStorage.getItem("pending_discord_id");
-        if (saved && /^\d{5,25}$/.test(saved)) {
-          setStoredDiscordId(saved);
-        }
-      }
-    } catch {}
-  }, [discordId]);
-
-  const effectiveDiscordId = discordId || storedDiscordId;
-
   const [phase, setPhase] = useState<Phase>("idle");
   const [error, setError] = useState<string>("");
   const [roleGranted, setRoleGranted] = useState<string>("");
   const [botIssue, setBotIssue] = useState<string>("");
+
+  // Completes a redirect sign-in when the user lands back on this page.
+  useEffect(() => {
+    if (!isFirebaseConfigured) return;
+    getRedirectResult(getFirebaseAuth()).catch((err) => {
+      setPhase("error");
+      setError(err instanceof Error ? err.message : "Sign-in failed. Try again.");
+    });
+  }, []);
 
   const signIn = useCallback(async () => {
     setError("");
     setPhase("signing-in");
 
     const auth = getFirebaseAuth();
-
-    if (effectiveDiscordId) {
-      try {
-        sessionStorage.setItem("pending_discord_id", effectiveDiscordId);
-      } catch {}
-    }
+    const openedAt = Date.now();
 
     try {
       await signInWithPopup(auth, googleProvider());
@@ -62,22 +49,29 @@ export default function AuthClient() {
       return;
     } catch (err) {
       const code = (err as { code?: string })?.code ?? "";
+      const message = (err as { message?: string })?.message ?? "";
 
-      // If the user deliberately closed or cancelled the popup, stay on the page
-      if (code === "auth/popup-closed-by-user" || code === "auth/cancelled-popup-request") {
-        setPhase("idle");
-        return;
-      }
-
-      // If the browser (Firefox, Opera, Safari, mobile) blocked the popup, fall back to redirect
-      if (
+      // Firefox, Safari, Brave, Opera and Zen block auth popups far more
+      // aggressively than Chrome, and storage partitioning breaks the popup
+      // flow outright in some of them. Fall back to a full-page redirect.
+      //
+      // popup-closed-by-user is ambiguous: it fires both when the browser
+      // kills the popup instantly and when someone deliberately closes it.
+      // A popup that dies in under 1.5s was blocked, not closed — redirecting
+      // on a genuine cancel would be baffling.
+      const dismissedFast = Date.now() - openedAt < 1500;
+      const shouldRedirect =
         code === "auth/popup-blocked" ||
+        code === "auth/cancelled-popup-request" ||
         code === "auth/operation-not-supported-in-this-environment" ||
-        code === "auth/internal-error"
-      ) {
+        code === "auth/internal-error" ||
+        (code === "auth/popup-closed-by-user" && dismissedFast) ||
+        /popup|cross-origin/i.test(message);
+
+      if (shouldRedirect) {
         try {
           await signInWithRedirect(auth, googleProvider());
-          return; // page navigates away to Google
+          return; // page navigates away
         } catch (redirectErr) {
           setPhase("error");
           setError(
@@ -89,18 +83,29 @@ export default function AuthClient() {
         }
       }
 
+      if (code === "auth/popup-closed-by-user") {
+        setPhase("idle"); // deliberate cancel
+        return;
+      }
+
       setPhase("error");
       setError(err instanceof Error ? err.message : "Sign-in failed. Try again.");
     }
-  }, [effectiveDiscordId]);
+  }, []);
 
   // Once signed in, register the member and link Discord if the bot sent an id.
+  //
+  // `phase` must NOT be a dependency here. It used to be, and setPhase("linking")
+  // inside the effect then changed it, which fired this effect's own cleanup,
+  // set cancelled = true, and left every completion path short-circuited — the
+  // request succeeded server-side but the button sat on "Linking..." forever.
+  // A ref guards against running twice instead.
   const startedFor = useRef<string | null>(null);
 
   useEffect(() => {
     if (!token) return;
 
-    const runKey = `${token}:${effectiveDiscordId ?? ""}`;
+    const runKey = `${token}:${discordId ?? ""}`;
     if (startedFor.current === runKey) return;
     startedFor.current = runKey;
 
@@ -110,13 +115,9 @@ export default function AuthClient() {
         setPhase("linking");
         await api.syncUser(token);
 
-        if (effectiveDiscordId) {
-          const res = await api.verifyDiscord(token, effectiveDiscordId);
+        if (discordId) {
+          const res = await api.verifyDiscord(token, discordId);
           if (cancelled) return;
-
-          try {
-            sessionStorage.removeItem("pending_discord_id");
-          } catch {}
 
           // The API answers 200 even when the bot could not grant the role —
           // member not in the server, bot offline, missing permissions. Report
@@ -145,7 +146,7 @@ export default function AuthClient() {
     return () => {
       cancelled = true;
     };
-  }, [token, effectiveDiscordId]);
+  }, [token, discordId]);
 
   /* ------------------------------------------------------------- states */
 
