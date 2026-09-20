@@ -5,11 +5,13 @@ import { useEffect, useState } from "react";
 import Pill from "./Pill";
 import styles from "./SiteNav.module.css";
 
+// Only routes that exist and have real data behind them. Writing, Events,
+// Research and Team are in the PRD but have no source yet — no collection, no
+// admin entry path — so they are deliberately absent rather than linked to a
+// 404 or filled with placeholder content. Add the link when the page is real.
 const LINKS = [
   { href: "/tracks", label: "Tracks" },
-  { href: "/writing", label: "Writing" },
   { href: "/projects", label: "Projects" },
-  { href: "/events", label: "Events" },
 ];
 
 export default function SiteNav() {

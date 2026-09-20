@@ -18,10 +18,11 @@ export default function SiteFooter() {
 
         <nav className={styles.cols} aria-label="Footer">
           <div>
+            {/* Same rule as the nav: only pages that exist. */}
             <p className={`mono ${styles.colhead}`}>Club</p>
             <Link className={styles.a} href="/tracks">Tracks</Link>
-            <Link className={styles.a} href="/events">Events</Link>
-            <Link className={styles.a} href="/writing">Writing</Link>
+            <Link className={styles.a} href="/projects">Projects</Link>
+            <Link className={styles.a} href="/auth">Sign in</Link>
           </div>
           <div>
             <p className={`mono ${styles.colhead}`}>Open source</p>
