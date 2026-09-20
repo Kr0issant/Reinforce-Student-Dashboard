@@ -1,0 +1,172 @@
+/* ------------------------------------------------------------------ hero -- */
+.hero { padding: clamp(64px, 12vh, 132px) 0 clamp(56px, 10vh, 104px); }
+
+.heroInner { text-align: center; }
+
+.heroKick { color: var(--ink-4); margin-bottom: 26px; }
+.kickAccent { color: var(--brand); }
+
+.heroTitle {
+  font-size: clamp(2.6rem, 7vw, 4.75rem);
+  margin-bottom: 22px;
+}
+
+.heroBody {
+  font-size: clamp(0.95rem, 1.6vw, 1.0625rem);
+  line-height: 1.7;
+  color: var(--ink-3);
+  max-width: 58ch;
+  margin: 0 auto 32px;
+}
+
+.heroCtas {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+/* ----------------------------------------------------------------- paper -- */
+.paper { padding: clamp(56px, 9vh, 96px) 0; }
+
+.paperTitle {
+  text-align: center;
+  font-size: clamp(1.75rem, 3.6vw, 2.6rem);
+  font-weight: 800;
+  letter-spacing: -0.032em;
+  line-height: 1.12;
+  color: var(--paper-ink);
+  margin-bottom: 12px;
+}
+.paperAccent { color: var(--brand-ink); }
+
+.paperSub {
+  text-align: center;
+  font-size: 0.9375rem;
+  color: var(--paper-ink-2);
+  max-width: 56ch;
+  margin: 0 auto 40px;
+  line-height: 1.65;
+}
+
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 16px;
+}
+
+/* --------------------------------------------------------------- strike -- */
+.strike { padding: clamp(36px, 6vh, 62px) 0; }
+
+.strikeLine {
+  text-align: center;
+  font-size: clamp(1.1rem, 3.2vw, 2rem);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: var(--paper-ink-3);
+  line-height: 1.3;
+}
+.strikeLine del {
+  text-decoration-line: line-through;
+  text-decoration-color: var(--brand-ink);
+  text-decoration-thickness: 2px;
+}
+.strikeLine strong { color: var(--brand-ink); }
+
+/* --------------------------------------------------------------- tracks -- */
+.tracks { padding: clamp(56px, 9vh, 96px) 0; }
+
+.tracksTitle {
+  text-align: center;
+  font-size: clamp(1.9rem, 4.4vw, 3rem);
+  margin-bottom: 46px;
+}
+
+.trackList {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(255px, 1fr));
+  gap: 0;
+  border-top: 1px solid var(--line);
+}
+
+.trackItem {
+  padding: 28px 26px 30px;
+  border-bottom: 1px solid var(--line);
+  border-right: 1px solid var(--line);
+}
+.trackItem:last-child { border-right: 0; }
+
+.trackIndex {
+  color: var(--brand);
+  font-size: 0.625rem;
+  letter-spacing: 0.16em;
+  margin-bottom: 14px;
+}
+
+.trackName {
+  font-size: 1.625rem;
+  margin-bottom: 10px;
+  color: var(--ink);
+}
+
+.trackBody {
+  font-size: 0.875rem;
+  line-height: 1.68;
+  color: var(--ink-3);
+}
+
+/* ---------------------------------------------------------------- steps -- */
+.steps { display: grid; gap: 4px; max-width: 760px; margin: 0 auto; }
+
+.step {
+  display: grid;
+  grid-template-columns: 44px 1fr;
+  gap: 16px;
+  align-items: start;
+  padding: 20px 0;
+  border-bottom: 1px dashed var(--paper-line-2);
+}
+.step:last-child { border-bottom: 0; }
+
+.stepNum {
+  font-size: 0.6875rem;
+  color: var(--brand-ink);
+  letter-spacing: 0.14em;
+  padding-top: 4px;
+}
+
+.stepTitle {
+  font-size: 1.0625rem;
+  font-weight: 700;
+  letter-spacing: -0.018em;
+  color: var(--paper-ink);
+  margin-bottom: 5px;
+}
+
+.stepBody {
+  font-size: 0.875rem;
+  line-height: 1.65;
+  color: var(--paper-ink-2);
+  max-width: 62ch;
+}
+
+/* ------------------------------------------------------------------ cta -- */
+.cta { padding: clamp(64px, 11vh, 118px) 0; }
+.ctaInner { text-align: center; }
+
+.ctaTitle {
+  font-size: clamp(1.9rem, 4.8vw, 3.25rem);
+  margin-bottom: 30px;
+}
+
+.ctaRow {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 640px) {
+  .trackItem { border-right: 0; }
+  .step { grid-template-columns: 34px 1fr; gap: 12px; }
+}
