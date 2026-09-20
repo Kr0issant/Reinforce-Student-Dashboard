@@ -93,7 +93,7 @@ jobs:
       - name: Block credential files
         run: |
           set -euo pipefail
-          if git ls-files | grep -E '(^|/)(\.env$|\.env\.[^e]|serviceAccountKey\.json|firebase_credentials\.json)'; then
+          if git ls-files | grep -E '(^|/)(\.env$|\.env\.[^e]|.*serviceAccount.*\.json|.*firebase-adminsdk.*\.json|firebase_credentials\.json)'; then
             echo "::error::A credential file is tracked in this repository. Remove it and rotate the key."
             exit 1
           fi
