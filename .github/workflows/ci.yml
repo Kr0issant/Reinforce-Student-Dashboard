@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  client:
+    name: Client — lint and build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: client
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      - run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+
+  server:
+    name: Server — dependencies and syntax
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Resolve dependencies
+        run: uv sync --locked
+
+      # The app initialises Firebase Admin at import time, so it cannot be imported
+      # without credentials. Compile-check instead — this catches syntax and
+      # indentation errors without needing a service account key in CI.
+      - name: Compile check
+        run: uv run python -m compileall -q app main.py
+
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Block credential files
+        run: |
+          set -euo pipefail
+          if git ls-files | grep -E '(^|/)(\.env$|\.env\.[^e]|serviceAccountKey\.json|firebase_credentials\.json)'; then
+            echo "::error::A credential file is tracked in this repository. Remove it and rotate the key."
+            exit 1
+          fi
+          echo "No credential files tracked."

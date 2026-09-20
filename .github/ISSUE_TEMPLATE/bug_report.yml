@@ -1,0 +1,44 @@
+name: Bug report
+description: Something is broken or behaves incorrectly.
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you see, and what did you expect instead?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Go to ...
+        2. Click ...
+        3. See ...
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Where?
+      options:
+        - Public website
+        - Member dashboard
+        - Sign-in / Discord verification
+        - API
+        - Not sure
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: Browser and device
+      placeholder: Chrome 140, Windows 11 / Safari, iPhone 15
+  - type: textarea
+    id: console
+    attributes:
+      label: Console errors
+      description: Open DevTools, reproduce, paste anything red. Redact tokens and emails.
+      render: shell

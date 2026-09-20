@@ -1,0 +1,12 @@
+# Default owners for everything.
+*                       @Kr0issant @OfficialAbhinavSingh
+
+# Shared boundary with the YUVI Discord bot — changes here break another repository
+# with no build error. Always reviewed.
+/docs/DATA_CONTRACT.md  @Kr0issant @OfficialAbhinavSingh
+/server/app/api/        @Kr0issant
+/server/app/schemas/    @Kr0issant
+
+# Project conventions.
+/AGENTS.md              @OfficialAbhinavSingh
+/CONTRIBUTING.md        @OfficialAbhinavSingh

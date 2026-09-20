@@ -1,0 +1,34 @@
+name: Feature or task
+description: Something to build or improve.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: Describe the problem, not the solution you already have in mind.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed approach
+    validations:
+      required: true
+  - type: textarea
+    id: data
+    attributes:
+      label: Where does the data come from?
+      description: >
+        Required. If this renders anything, name the collection or endpoint behind it.
+        We do not ship placeholder content — a feature with no data source is not ready.
+    validations:
+      required: true
+  - type: checkboxes
+    id: blast
+    attributes:
+      label: Does this touch shared surface?
+      options:
+        - label: Firestore shape (coordinated change with the YUVI bot)
+        - label: Authentication or permissions
+        - label: The `/auth` route the bot deep-links to
