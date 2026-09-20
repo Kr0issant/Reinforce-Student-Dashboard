@@ -15,16 +15,33 @@ export class ApiError extends Error {
   }
 }
 
+/** Nothing should hang the UI forever. Render cold starts are slow but finite. */
+const TIMEOUT_MS = 20_000;
+
 async function request<T>(path: string, token: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-      ...init?.headers,
-    },
-    cache: "no-store",
-  });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+
+  let res: Response;
+  try {
+    res = await fetch(`${BASE}${path}`, {
+      ...init,
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+        ...init?.headers,
+      },
+      cache: "no-store",
+      signal: controller.signal,
+    });
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") {
+      throw new ApiError("The club server took too long to respond. Try again.", 504);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
 
   if (!res.ok) {
     let detail = `Request failed with status ${res.status}`;
@@ -59,6 +76,22 @@ export type StudentProfile = {
   verified_at?: string | null;
   skills: string[];
   social_links: SocialLinks;
+};
+
+/**
+ * The API answers 200 even when the bot could not grant the role — the member
+ * is not in the Discord server, the bot is offline, or it lacks permission.
+ * `bot_response.status` is how you tell a real success from a partial one.
+ */
+export type VerifyDiscordResponse = {
+  success: boolean;
+  role_granted?: string;
+  user: StudentProfile;
+  bot_response?: {
+    status?: "bot_warning" | "bot_unreachable" | string;
+    detail?: string;
+    role_granted?: string;
+  };
 };
 
 export type TicketCategory =
@@ -106,11 +139,10 @@ export const api = {
     request<{ success: boolean; user: StudentProfile }>("/auth/me", token),
 
   verifyDiscord: (token: string, discordId: string) =>
-    request<{ success: boolean; role_granted?: string; user: StudentProfile }>(
-      "/auth/verify-discord",
-      token,
-      { method: "POST", body: JSON.stringify({ discord_id: discordId }) },
-    ),
+    request<VerifyDiscordResponse>("/auth/verify-discord", token, {
+      method: "POST",
+      body: JSON.stringify({ discord_id: discordId }),
+    }),
 
   myTickets: (token: string) => request<TicketListResponse>("/tickets", token),
 };

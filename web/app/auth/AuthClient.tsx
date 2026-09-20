@@ -3,7 +3,7 @@
 import { signInWithPopup } from "firebase/auth";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Pill from "@/components/Pill";
 import { api, ApiError } from "@/lib/api";
 import { getFirebaseAuth, googleProvider, isFirebaseConfigured, SST_DOMAIN } from "@/lib/firebase";
@@ -25,6 +25,7 @@ export default function AuthClient() {
   const [phase, setPhase] = useState<Phase>("idle");
   const [error, setError] = useState<string>("");
   const [roleGranted, setRoleGranted] = useState<string>("");
+  const [botIssue, setBotIssue] = useState<string>("");
 
   const signIn = useCallback(async () => {
     setError("");
@@ -44,8 +45,20 @@ export default function AuthClient() {
   }, []);
 
   // Once signed in, register the member and link Discord if the bot sent an id.
+  //
+  // `phase` must NOT be a dependency here. It used to be, and setPhase("linking")
+  // inside the effect then changed it, which fired this effect's own cleanup,
+  // set cancelled = true, and left every completion path short-circuited — the
+  // request succeeded server-side but the button sat on "Linking..." forever.
+  // A ref guards against running twice instead.
+  const startedFor = useRef<string | null>(null);
+
   useEffect(() => {
-    if (!token || phase === "linking" || phase === "linked") return;
+    if (!token) return;
+
+    const runKey = `${token}:${discordId ?? ""}`;
+    if (startedFor.current === runKey) return;
+    startedFor.current = runKey;
 
     let cancelled = false;
     (async () => {
@@ -56,11 +69,22 @@ export default function AuthClient() {
         if (discordId) {
           const res = await api.verifyDiscord(token, discordId);
           if (cancelled) return;
-          setRoleGranted(res.role_granted ?? "Verified Member");
+
+          // The API answers 200 even when the bot could not grant the role —
+          // member not in the server, bot offline, missing permissions. Report
+          // what actually happened rather than claiming a role was granted.
+          const botStatus = res.bot_response?.status;
+          if (botStatus === "bot_warning" || botStatus === "bot_unreachable") {
+            setBotIssue(res.bot_response?.detail ?? "The bot could not be reached.");
+            setRoleGranted("");
+          } else {
+            setRoleGranted(res.role_granted ?? "Verified Member");
+          }
         }
         if (!cancelled) setPhase("linked");
       } catch (err) {
         if (cancelled) return;
+        startedFor.current = null; // allow a retry
         setPhase("error");
         setError(
           err instanceof ApiError
@@ -73,7 +97,7 @@ export default function AuthClient() {
     return () => {
       cancelled = true;
     };
-  }, [token, discordId, phase]);
+  }, [token, discordId]);
 
   /* ------------------------------------------------------------- states */
 
@@ -115,15 +139,25 @@ export default function AuthClient() {
             <>
               <div>
                 <dt className="mono">Discord</dt>
-                <dd>Linked</dd>
+                <dd>{botIssue ? "Saved, role pending" : "Linked"}</dd>
               </div>
-              <div>
-                <dt className="mono">Role</dt>
-                <dd>{roleGranted}</dd>
-              </div>
+              {roleGranted ? (
+                <div>
+                  <dt className="mono">Role</dt>
+                  <dd>{roleGranted}</dd>
+                </div>
+              ) : null}
             </>
           ) : null}
         </dl>
+
+        {botIssue ? (
+          <p className={styles.warn}>
+            Your account is saved, but the bot couldn&rsquo;t give you the Discord role — usually
+            because that account isn&rsquo;t in the club server yet. Join the server and run{" "}
+            <code>/auth</code> again.
+          </p>
+        ) : null}
         <div className={styles.actions}>
           <Pill href="/dashboard" variant="filled">Go to your dashboard</Pill>
         </div>
