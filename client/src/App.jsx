@@ -11,9 +11,13 @@ export default function App() {
   const [status, setStatus] = useState('idle'); // 'idle' | 'signing-in' | 'verifying' | 'success' | 'error'
   const [errorMessage, setErrorMessage] = useState('');
   const [successData, setSuccessData] = useState(null);
-  const [testEmail, setTestEmail] = useState('');
-  const [testName, setTestName] = useState('');
-  const [showDirectTest, setShowDirectTest] = useState(false);
+  
+  // Modal state if Firebase keys are missing
+  const [showConfigModal, setShowConfigModal] = useState(false);
+  const [testEmail, setTestEmail] = useState('student@sst.scaler.com');
+  const [testName, setTestName] = useState('SST Student');
+  
+  // Backend endpoint selection: default to Dashboard server or Bot server
   const [serverEndpoint, setServerEndpoint] = useState('http://localhost:8000/internal/verify-success');
 
   // Parse discord_id from URL query params (e.g. /auth?discord_id=123456789)
@@ -26,10 +30,10 @@ export default function App() {
   }, []);
 
   // Handler for sending verification payload to the backend server
-  const sendVerificationToServer = async (userData) => {
+  const sendVerificationToServer = async (userData, token = null) => {
     if (!discordId) {
       setStatus('error');
-      setErrorMessage('Missing Discord User ID. Please open this page via Discord bot verification link or enter your Discord ID below.');
+      setErrorMessage('Please enter or provide a Discord User ID to continue.');
       return;
     }
 
@@ -37,6 +41,14 @@ export default function App() {
     setErrorMessage('');
 
     try {
+      const headers = {
+        'Content-Type': 'application/json',
+      };
+
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
       const payload = {
         discord_id: discordId,
         email: userData.email,
@@ -45,9 +57,7 @@ export default function App() {
 
       const response = await fetch(serverEndpoint, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: headers,
         body: JSON.stringify(payload),
       });
 
@@ -63,11 +73,12 @@ export default function App() {
         name: payload.name,
       });
       setStatus('success');
+      setShowConfigModal(false);
     } catch (err) {
       console.error('Verification error:', err);
       setStatus('error');
       setErrorMessage(
-        err.message || 'Failed to communicate with the verification server. Ensure the backend server is running.'
+        err.message || 'Failed to communicate with verification server. Ensure YUVI Bot / Dashboard server is running.'
       );
     }
   };
@@ -75,14 +86,14 @@ export default function App() {
   // Google Sign-In Handler
   const handleGoogleSignIn = async () => {
     if (!discordId) {
-      setErrorMessage('Please provide a Discord ID before signing in.');
       setStatus('error');
+      setErrorMessage('⚠️ Discord ID is missing. Please enter your Discord User ID above or open this page from the Discord bot.');
       return;
     }
 
-    if (!isFirebaseConfigured) {
-      // Firebase keys not provided in .env yet -> toggle simulated direct sign-in for testing
-      setShowDirectTest(true);
+    // If Firebase Web App is not configured in client .env yet
+    if (!isFirebaseConfigured || !auth) {
+      setShowConfigModal(true);
       return;
     }
 
@@ -92,11 +103,10 @@ export default function App() {
     try {
       const result = await signInWithPopup(auth, googleProvider);
       const user = result.user;
+      const email = (user.email || '').toLowerCase().trim();
 
       // Validate SST domain
-      const email = user.email || '';
       const isSstDomain = email.endsWith('@sst.scaler.com') || email.endsWith('@sst.edu.in');
-
       if (!isSstDomain) {
         setStatus('error');
         setErrorMessage(
@@ -105,10 +115,11 @@ export default function App() {
         return;
       }
 
+      const token = await user.getIdToken();
       await sendVerificationToServer({
         email: user.email,
         name: user.displayName,
-      });
+      }, token);
     } catch (err) {
       console.error('Google Sign In error:', err);
       setStatus('error');
@@ -116,12 +127,12 @@ export default function App() {
     }
   };
 
-  // Direct Simulated Test for Development
-  const handleSimulatedSubmit = async (e) => {
-    e.preventDefault();
-    if (!testEmail) {
-      setErrorMessage('Please enter an email address.');
+  // Quick Test Submit (Direct verification without live Google popup)
+  const handleQuickTestSubmit = async (e) => {
+    if (e) e.preventDefault();
+    if (!discordId) {
       setStatus('error');
+      setErrorMessage('Please enter a Discord ID first.');
       return;
     }
 
@@ -233,7 +244,7 @@ export default function App() {
               Verification Successful!
             </h2>
             <p style={{ color: 'var(--text-secondary)', fontSize: '14px', lineHeight: 1.5, marginBottom: '24px' }}>
-              Your SST Google account has been verified. The Discord Bot has granted your member role.
+              Your Google account has been verified. The Discord Bot has granted your member role.
             </p>
 
             <div style={{
@@ -282,7 +293,7 @@ export default function App() {
               }}>
                 <span className={`pulse-badge ${discordId ? 'active' : 'warning'}`}>
                   <span className="pulse-dot" />
-                  {discordId ? 'Discord Bot Connected' : 'Missing Discord ID'}
+                  {discordId ? 'Discord Account Detected' : 'Missing Discord ID'}
                 </span>
               </div>
 
@@ -290,7 +301,7 @@ export default function App() {
                 Member <span className="gradient-text">Verification</span>
               </h1>
               <p style={{ color: 'var(--text-secondary)', fontSize: '14px', lineHeight: 1.5 }}>
-                Sign in with your official SST Google account (<strong style={{ color: '#e2e8f0' }}>@sst.scaler.com</strong>) to unlock club channels and roles.
+                Sign in with your official SST Google account (<strong style={{ color: '#e2e8f0' }}>@sst.scaler.com</strong>) to unlock Discord server access.
               </p>
             </div>
 
@@ -314,41 +325,41 @@ export default function App() {
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="4" x2="20" y1="9" y2="9"/><line x1="4" x2="20" y1="15" y2="15"/><line x1="10" x2="8" y1="3" y2="21"/><line x1="16" x2="14" y1="3" y2="21"/></svg>
                   Discord Target User ID
                 </span>
-                {discordId && <span style={{ color: '#57f287', fontWeight: 600 }}>Detected</span>}
+                {discordId ? (
+                  <span style={{ color: '#57f287', fontWeight: 600 }}>Linked</span>
+                ) : (
+                  <span style={{ color: '#ff7b72', fontWeight: 600 }}>Required</span>
+                )}
               </div>
 
-              {discordId ? (
-                <div style={{ 
-                  fontFamily: 'monospace', 
-                  fontSize: '14px', 
-                  color: '#8fa3ff', 
-                  fontWeight: 600,
-                  letterSpacing: '0.05em'
-                }}>
-                  {discordId}
-                </div>
-              ) : (
-                <div>
-                  <input
-                    type="text"
-                    placeholder="Enter Discord ID (e.g. 1549547403819090011)"
-                    value={discordId}
-                    onChange={(e) => setDiscordId(e.target.value.trim())}
-                    style={{
-                      width: '100%',
-                      background: 'transparent',
-                      border: 'none',
-                      color: 'var(--text-primary)',
-                      fontFamily: 'monospace',
-                      fontSize: '13px',
-                      outline: 'none'
-                    }}
-                  />
-                  <div style={{ fontSize: '11px', color: '#ff7b72', marginTop: '4px' }}>
-                    Tip: Use <code>/auth</code> in Discord to auto-fill this link.
+              <div>
+                <input
+                  type="text"
+                  placeholder="Enter Discord ID (e.g. 1549547403819090011)"
+                  value={discordId}
+                  onChange={(e) => {
+                    setDiscordId(e.target.value.trim());
+                    if (errorMessage) setErrorMessage('');
+                  }}
+                  style={{
+                    width: '100%',
+                    background: discordId ? 'transparent' : 'rgba(255, 255, 255, 0.05)',
+                    border: discordId ? 'none' : '1px solid rgba(88, 101, 242, 0.4)',
+                    borderRadius: '6px',
+                    padding: discordId ? '0' : '8px 10px',
+                    color: discordId ? '#8fa3ff' : 'var(--text-primary)',
+                    fontFamily: 'monospace',
+                    fontSize: '14px',
+                    fontWeight: 600,
+                    outline: 'none'
+                  }}
+                />
+                {!discordId && (
+                  <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '6px' }}>
+                    💡 Tip: Clicking <strong>Verify with Google</strong> inside Discord fills this automatically.
                   </div>
-                </div>
-              )}
+                )}
+              </div>
             </div>
 
             {/* Error Message Box */}
@@ -382,6 +393,7 @@ export default function App() {
                 disabled={status === 'signing-in' || status === 'verifying'}
                 className="btn-google"
                 id="google-signin-btn"
+                type="button"
               >
                 {status === 'signing-in' || status === 'verifying' ? (
                   <>
@@ -408,132 +420,26 @@ export default function App() {
                 )}
               </button>
 
-              {/* Development Quick Test Accordion */}
-              <div style={{ marginTop: '8px' }}>
-                <button
-                  type="button"
-                  onClick={() => setShowDirectTest(!showDirectTest)}
-                  style={{
-                    background: 'transparent',
-                    border: 'none',
-                    color: 'var(--text-muted)',
-                    fontSize: '12px',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    width: '100%',
-                    gap: '6px',
-                    padding: '6px'
-                  }}
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="4 17 10 11 4 5"/><line x1="12" x2="20" y1="19" y2="19"/></svg>
-                  <span>{showDirectTest ? 'Hide Developer Test Panel' : 'Test Mode / Direct Bot Test'}</span>
-                </button>
-
-                {showDirectTest && (
-                  <form 
-                    onSubmit={handleSimulatedSubmit}
-                    className="animate-fade-in"
-                    style={{
-                      background: 'rgba(13, 17, 28, 0.9)',
-                      border: '1px solid rgba(88, 101, 242, 0.25)',
-                      borderRadius: 'var(--radius-md)',
-                      padding: '16px',
-                      marginTop: '10px',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: '10px'
-                    }}
-                  >
-                    <div style={{ fontSize: '12px', fontWeight: 600, color: '#8fa3ff' }}>
-                      🧪 Bot Verification Testing Tool
-                    </div>
-
-                    <div>
-                      <label style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>
-                        College Email:
-                      </label>
-                      <input
-                        type="email"
-                        required
-                        placeholder="student@sst.scaler.com"
-                        value={testEmail}
-                        onChange={(e) => setTestEmail(e.target.value)}
-                        style={{
-                          width: '100%',
-                          padding: '8px 12px',
-                          background: 'rgba(255, 255, 255, 0.05)',
-                          border: '1px solid rgba(255, 255, 255, 0.1)',
-                          borderRadius: '6px',
-                          color: '#ffffff',
-                          fontSize: '13px',
-                          outline: 'none'
-                        }}
-                      />
-                    </div>
-
-                    <div>
-                      <label style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>
-                        Full Name (Optional):
-                      </label>
-                      <input
-                        type="text"
-                        placeholder="Arya Sharma"
-                        value={testName}
-                        onChange={(e) => setTestName(e.target.value)}
-                        style={{
-                          width: '100%',
-                          padding: '8px 12px',
-                          background: 'rgba(255, 255, 255, 0.05)',
-                          border: '1px solid rgba(255, 255, 255, 0.1)',
-                          borderRadius: '6px',
-                          color: '#ffffff',
-                          fontSize: '13px',
-                          outline: 'none'
-                        }}
-                      />
-                    </div>
-
-                    <div>
-                      <label style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>
-                        Backend Endpoint:
-                      </label>
-                      <input
-                        type="text"
-                        value={serverEndpoint}
-                        onChange={(e) => setServerEndpoint(e.target.value)}
-                        style={{
-                          width: '100%',
-                          padding: '8px 12px',
-                          background: 'rgba(255, 255, 255, 0.05)',
-                          border: '1px solid rgba(255, 255, 255, 0.1)',
-                          borderRadius: '6px',
-                          color: '#94a3b8',
-                          fontSize: '11px',
-                          fontFamily: 'monospace',
-                          outline: 'none'
-                        }}
-                      />
-                    </div>
-
-                    <button
-                      type="submit"
-                      disabled={status === 'verifying'}
-                      className="btn-secondary"
-                      style={{ marginTop: '4px' }}
-                    >
-                      {status === 'verifying' ? 'Dispatching...' : 'Dispatch Verification POST Request'}
-                    </button>
-                  </form>
-                )}
+              {/* Endpoint Config Bar */}
+              <div style={{ 
+                display: 'flex', 
+                alignItems: 'center', 
+                justifyContent: 'space-between',
+                fontSize: '11px',
+                color: 'var(--text-muted)',
+                marginTop: '4px'
+              }}>
+                <span>API Endpoint:</span>
+                <span style={{ fontFamily: 'monospace', color: '#8fa3ff' }}>
+                  {serverEndpoint.includes('8000') ? 'YUVI Bot (:8000)' : 'Dashboard API (:8080)'}
+                </span>
               </div>
             </div>
 
             {/* Footer Information */}
             <div style={{
-              marginTop: '28px',
-              paddingTop: '20px',
+              marginTop: '24px',
+              paddingTop: '16px',
               borderTop: '1px solid rgba(255, 255, 255, 0.06)',
               display: 'flex',
               alignItems: 'center',
@@ -543,11 +449,109 @@ export default function App() {
               color: 'var(--text-muted)'
             }}>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#57f287" strokeWidth="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-              <span>Official Reinforce Club SST Bot Authentication</span>
+              <span>Reinforce Club SST • Verification Portal</span>
             </div>
           </div>
         )}
       </main>
+
+      {/* Modal: When Firebase Web Config is missing */}
+      {showConfigModal && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(0, 0, 0, 0.75)',
+          backdropFilter: 'blur(8px)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: '16px',
+          zIndex: 100
+        }}>
+          <div className="glass-panel animate-fade-in" style={{
+            width: '100%',
+            maxWidth: '440px',
+            padding: '28px 24px',
+            border: '1px solid rgba(88, 101, 242, 0.3)'
+          }}>
+            <h3 style={{ fontSize: '18px', fontWeight: 700, marginBottom: '10px', color: '#ffffff' }}>
+              ⚡ Quick Bot Verification Test
+            </h3>
+            <p style={{ fontSize: '13px', color: 'var(--text-secondary)', lineHeight: 1.5, marginBottom: '16px' }}>
+              Firebase Web Client API keys are not in <code style={{ color: '#8fa3ff' }}>client/.env</code> yet. You can run a direct verification to test your Discord Bot roles right now!
+            </p>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '16px' }}>
+              <div>
+                <label style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>
+                  Target Discord ID:
+                </label>
+                <input
+                  type="text"
+                  value={discordId}
+                  onChange={(e) => setDiscordId(e.target.value.trim())}
+                  placeholder="e.g. 1549547403819090011"
+                  style={{
+                    width: '100%',
+                    padding: '8px 12px',
+                    background: 'rgba(255, 255, 255, 0.05)',
+                    border: '1px solid rgba(255, 255, 255, 0.1)',
+                    borderRadius: '6px',
+                    color: '#ffffff',
+                    fontFamily: 'monospace',
+                    fontSize: '13px',
+                    outline: 'none'
+                  }}
+                />
+              </div>
+
+              <div>
+                <label style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>
+                  Student Email:
+                </label>
+                <input
+                  type="email"
+                  value={testEmail}
+                  onChange={(e) => setTestEmail(e.target.value)}
+                  placeholder="student@sst.scaler.com"
+                  style={{
+                    width: '100%',
+                    padding: '8px 12px',
+                    background: 'rgba(255, 255, 255, 0.05)',
+                    border: '1px solid rgba(255, 255, 255, 0.1)',
+                    borderRadius: '6px',
+                    color: '#ffffff',
+                    fontSize: '13px',
+                    outline: 'none'
+                  }}
+                />
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: '10px' }}>
+              <button
+                type="button"
+                onClick={handleQuickTestSubmit}
+                className="btn-google"
+                style={{ flex: 1, padding: '10px 16px', background: '#5865f2', color: '#ffffff' }}
+              >
+                Send Verification to Bot
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowConfigModal(false)}
+                className="btn-secondary"
+                style={{ width: 'auto', padding: '10px 16px' }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <style>{`
         @keyframes spin {

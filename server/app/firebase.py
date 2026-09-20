@@ -7,7 +7,7 @@ settings = get_settings()
 # Initialize Firebase Admin SDK once
 cred = credentials.Certificate(settings.firebase_credentials_path)
 firebase_admin.initialize_app(cred, {
-    # 'storageBucket': settings.FIREBASE_STORAGE_BUCKET # No Access yet
+    'storageBucket': settings.firebase_storage_bucket # No Access yet
 })
 
 # Export clients to use across your services
