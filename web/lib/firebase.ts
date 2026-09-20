@@ -26,7 +26,21 @@ export function getFirebaseAuth(): Auth {
       "Firebase is not configured. Copy .env.example to .env.local and fill in NEXT_PUBLIC_FIREBASE_*.",
     );
   }
-  const app = getApps().length ? getApp() : initializeApp(config);
+
+  // In production browser environments (Vercel / custom domain), setting authDomain
+  // to window.location.host routes authentication through the same-origin Next.js reverse proxy (/ __/auth/*).
+  // This completely eliminates third-party cookie blocking in Firefox, Zen, Opera, and Safari.
+  const dynamicConfig: FirebaseOptions = {
+    ...config,
+    authDomain:
+      typeof window !== "undefined" &&
+      window.location.hostname !== "localhost" &&
+      window.location.hostname !== "127.0.0.1"
+        ? window.location.host
+        : config.authDomain || `${config.projectId}.firebaseapp.com`,
+  };
+
+  const app = getApps().length ? getApp() : initializeApp(dynamicConfig);
   return getAuth(app);
 }
 
