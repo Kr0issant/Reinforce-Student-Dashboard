@@ -3,6 +3,8 @@ import {
   auth, 
   googleProvider, 
   signInWithPopup, 
+  signInWithRedirect,
+  getRedirectResult,
   signOut, 
   onAuthStateChanged, 
   isFirebaseConfigured 
@@ -105,12 +107,41 @@ export default function App() {
     return null;
   }, []);
 
-  // 3. Persistent Firebase Auth Listener
+  // 3. Persistent Firebase Auth Listener & Redirect Result Handler
   useEffect(() => {
     if (!isFirebaseConfigured || !auth) {
       setIsAuthLoading(false);
       return;
     }
+
+    // Check for incoming redirect sign-in (for Zen/Opera/Firefox/Safari)
+    getRedirectResult(auth).then(async (result) => {
+      if (result?.user) {
+        const user = result.user;
+        const email = (user.email || '').toLowerCase().trim();
+        const isSstDomain = email.endsWith('@sst.scaler.com') || email.endsWith('@sst.edu.in');
+        if (!isSstDomain) {
+          await signOut(auth);
+          setStatus('error');
+          setErrorMessage(`Access Restricted: (${email}) is not an SST college email.`);
+          return;
+        }
+
+        const token = await user.getIdToken();
+        setAuthToken(token);
+        setAuthUser(user);
+
+        const savedDiscordId = sessionStorage.getItem('pending_discord_id') || discordId;
+        if (savedDiscordId) {
+          sessionStorage.removeItem('pending_discord_id');
+          await linkDiscordAccount(savedDiscordId, token, user);
+        } else {
+          await syncUserProfile(token, user);
+        }
+      }
+    }).catch((err) => {
+      console.warn('Redirect auth check notice:', err.message);
+    });
 
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
@@ -131,15 +162,19 @@ export default function App() {
     });
 
     return () => unsubscribe();
-  }, [syncUserProfile]);
+  }, [syncUserProfile, discordId]);
 
-  // 4. Handle Direct Google Sign In
+  // 4. Handle Direct Google Sign In (with Popup + Automatic Redirect Fallback for Zen/Opera)
   const handleGoogleSignIn = async () => {
     setErrorMessage('');
     
     if (!isFirebaseConfigured || !auth) {
       setShowConfigModal(true);
       return;
+    }
+
+    if (discordId) {
+      sessionStorage.setItem('pending_discord_id', discordId);
     }
 
     setStatus('signing-in');
@@ -170,7 +205,29 @@ export default function App() {
         setStatus('idle');
       }
     } catch (err) {
-      console.error('Google Sign In error:', err);
+      console.warn('Google Popup failed, attempting Redirect mode:', err.code, err.message);
+      
+      // If popup is blocked by browser (Zen/Opera/Firefox) or cross-origin iframe storage partitioned
+      const shouldFallbackToRedirect = 
+        err.code === 'auth/popup-blocked' ||
+        err.code === 'auth/popup-closed-by-user' ||
+        err.code === 'auth/cancelled-popup-request' ||
+        err.code === 'auth/internal-error' ||
+        err.message?.includes('popup') ||
+        err.message?.includes('Cross-Origin');
+
+      if (shouldFallbackToRedirect) {
+        try {
+          await signInWithRedirect(auth, googleProvider);
+          return;
+        } catch (redirectErr) {
+          console.error('Redirect sign-in error:', redirectErr);
+          setStatus('error');
+          setErrorMessage(redirectErr.message || 'Failed to initiate Google Sign-In redirect.');
+          return;
+        }
+      }
+
       setStatus('error');
       setErrorMessage(err.message || 'Google sign-in was cancelled or encountered an error.');
     }
