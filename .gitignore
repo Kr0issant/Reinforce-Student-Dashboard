@@ -1,6 +1,46 @@
-server/.env
-server/serviceAccountKey.json
+# ---- Secrets. Never commit these. ----
+.env
+.env.*
+!.env.example
+**/serviceAccountKey.json
+**/firebase_credentials.json
+*.pem
+*.key
 
-*.pyc
+# ---- Python ----
 __pycache__/
-# server\app\__pycache__\config.cpython-313.pyc
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# ---- Node ----
+node_modules/
+dist/
+dist-ssr/
+.next/
+out/
+*.local
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ---- Tooling / deploy ----
+.vercel/
+.turbo/
+coverage/
+
+# ---- Editors ----
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+
+# ---- OS ----
+.DS_Store
+Thumbs.db
