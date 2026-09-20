@@ -44,7 +44,7 @@ export function useAuth(): AuthState & { signOut: () => Promise<void> } {
   useEffect(() => {
     if (!isFirebaseConfigured) return;
 
-    let unsubscribe: (() => void) | undefined;
+    let isCancelled = false;
 
     const watchdog = setTimeout(() => {
       if (settled.current) return;
@@ -55,52 +55,52 @@ export function useAuth(): AuthState & { signOut: () => Promise<void> } {
     const settle = (next: Partial<AuthState>) => {
       settled.current = true;
       clearTimeout(watchdog);
-      setState((prev) => ({ ...prev, loading: false, degraded: false, ...next }));
+      if (!isCancelled) {
+        setState((prev) => ({ ...prev, loading: false, degraded: false, ...next }));
+      }
     };
 
-    try {
-      const auth = getFirebaseAuth();
+    const initAuth = async () => {
+      try {
+        const auth = getFirebaseAuth();
 
-      // Check for incoming redirect result first (for redirect login on Firefox, Zen, Opera, Safari, Mobile)
-      getRedirectResult(auth)
-        .then(async (credential) => {
-          if (credential?.user) {
-            try {
-              const token = await credential.user.getIdToken();
-              settle({ user: credential.user, token });
-            } catch {
-              settle({ user: credential.user, token: null, degraded: true });
+        // 1. Process redirect result if returning from a full-page OAuth redirect
+        try {
+          const redirectResult = await getRedirectResult(auth);
+          if (redirectResult?.user) {
+            const token = await redirectResult.user.getIdToken();
+            settle({ user: redirectResult.user, token });
+          }
+        } catch (err) {
+          console.warn("[useAuth] Redirect check:", err);
+        }
+
+        // 2. Subscribe to persistent auth state changes
+        unsubscribe = onAuthStateChanged(
+          auth,
+          async (user) => {
+            if (!user) {
+              settle({ user: null, token: null });
+              return;
             }
-          }
-        })
-        .catch((err) => {
-          console.warn("[useAuth] Redirect check error:", err);
-        });
+            try {
+              const token = await user.getIdToken();
+              settle({ user, token });
+            } catch {
+              settle({ user: null, token: null, degraded: true });
+            }
+          },
+          () => settle({ user: null, token: null, degraded: true }),
+        );
+      } catch {
+        settle({ user: null, token: null, degraded: true });
+      }
+    };
 
-      unsubscribe = onAuthStateChanged(
-        auth,
-        async (user) => {
-          if (!user) {
-            // Only settle null if no user is found
-            settle({ user: null, token: null });
-            return;
-          }
-          try {
-            const token = await user.getIdToken();
-            settle({ user, token });
-          } catch {
-            // Signed in but the token could not be minted — treat as signed out
-            // rather than leaving the caller with a user and no credential.
-            settle({ user: null, token: null, degraded: true });
-          }
-        },
-        () => settle({ user: null, token: null, degraded: true }),
-      );
-    } catch {
-      settle({ user: null, token: null, degraded: true });
-    }
+    initAuth();
 
     return () => {
+      isCancelled = true;
       clearTimeout(watchdog);
       unsubscribe?.();
     };
