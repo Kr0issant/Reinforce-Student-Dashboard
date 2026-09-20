@@ -4,7 +4,7 @@ from app.config import get_settings
 # Import firebase to ensure it initializes when the app starts
 import app.firebase 
 
-from app.api.v1.end_points import auth  # (or from app.api.v1.endpoints.auth import router as auth_router)
+from app.api.v1.endpoints import auth  
 
 settings = get_settings()
 app = FastAPI()
