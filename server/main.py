@@ -18,9 +18,29 @@ origins = [
     "https://reinforce-student-dashboard.vercel.app",
 ]
 
+# Vercel gives every preview deployment its own hostname, so reviewers cannot be
+# served by adding URLs to the list above one at a time. All of them are the
+# project name, an optional per-deployment or per-branch segment, then the team
+# slug:
+#
+#     reinforce-student-dashboard-reinforce3.vercel.app
+#     reinforce-student-dashboard-<hash>-reinforce3.vercel.app
+#     reinforce-student-dashboard-git-<branch>-reinforce3.vercel.app
+#
+# Starlette matches this with re.fullmatch, so the pattern is anchored at both
+# ends and a hostname cannot be extended past it — ...vercel.app.attacker.com
+# does not match. Both the project name and the team slug are required, so this
+# widens access to our own previews and nothing else. If the project moves to a
+# club-owned Vercel team the slug changes and this stops matching, which fails
+# closed rather than open.
+preview_origin_regex = (
+    r"https://reinforce-student-dashboard(-[a-z0-9-]+)?-reinforce3\.vercel\.app"
+)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
+    allow_origin_regex=preview_origin_regex,
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
