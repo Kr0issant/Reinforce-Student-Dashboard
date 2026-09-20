@@ -1,6 +1,6 @@
 "use client";
 
-import { signInWithPopup } from "firebase/auth";
+import { getRedirectResult, signInWithPopup, signInWithRedirect } from "firebase/auth";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -27,18 +27,67 @@ export default function AuthClient() {
   const [roleGranted, setRoleGranted] = useState<string>("");
   const [botIssue, setBotIssue] = useState<string>("");
 
+  // Completes a redirect sign-in when the user lands back on this page.
+  useEffect(() => {
+    if (!isFirebaseConfigured) return;
+    getRedirectResult(getFirebaseAuth()).catch((err) => {
+      setPhase("error");
+      setError(err instanceof Error ? err.message : "Sign-in failed. Try again.");
+    });
+  }, []);
+
   const signIn = useCallback(async () => {
     setError("");
     setPhase("signing-in");
+
+    const auth = getFirebaseAuth();
+    const openedAt = Date.now();
+
     try {
-      await signInWithPopup(getFirebaseAuth(), googleProvider());
+      await signInWithPopup(auth, googleProvider());
       // The rest is driven by useAuth's state change, then the effect below.
+      return;
     } catch (err) {
       const code = (err as { code?: string })?.code ?? "";
-      if (code === "auth/popup-closed-by-user" || code === "auth/cancelled-popup-request") {
-        setPhase("idle");
+      const message = (err as { message?: string })?.message ?? "";
+
+      // Firefox, Safari, Brave, Opera and Zen block auth popups far more
+      // aggressively than Chrome, and storage partitioning breaks the popup
+      // flow outright in some of them. Fall back to a full-page redirect.
+      //
+      // popup-closed-by-user is ambiguous: it fires both when the browser
+      // kills the popup instantly and when someone deliberately closes it.
+      // A popup that dies in under 1.5s was blocked, not closed — redirecting
+      // on a genuine cancel would be baffling.
+      const dismissedFast = Date.now() - openedAt < 1500;
+      const shouldRedirect =
+        code === "auth/popup-blocked" ||
+        code === "auth/cancelled-popup-request" ||
+        code === "auth/operation-not-supported-in-this-environment" ||
+        code === "auth/internal-error" ||
+        (code === "auth/popup-closed-by-user" && dismissedFast) ||
+        /popup|cross-origin/i.test(message);
+
+      if (shouldRedirect) {
+        try {
+          await signInWithRedirect(auth, googleProvider());
+          return; // page navigates away
+        } catch (redirectErr) {
+          setPhase("error");
+          setError(
+            redirectErr instanceof Error
+              ? redirectErr.message
+              : "Could not start Google sign-in.",
+          );
+          return;
+        }
+      }
+
+      if (code === "auth/popup-closed-by-user") {
+        setPhase("idle"); // deliberate cancel
         return;
       }
+
       setPhase("error");
       setError(err instanceof Error ? err.message : "Sign-in failed. Try again.");
     }
