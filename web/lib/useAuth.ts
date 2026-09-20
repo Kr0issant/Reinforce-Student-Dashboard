@@ -45,6 +45,7 @@ export function useAuth(): AuthState & { signOut: () => Promise<void> } {
     if (!isFirebaseConfigured) return;
 
     let unsubscribe: (() => void) | undefined;
+    let isCancelled = false;
 
     const watchdog = setTimeout(() => {
       if (settled.current) return;
@@ -55,11 +56,14 @@ export function useAuth(): AuthState & { signOut: () => Promise<void> } {
     const settle = (next: Partial<AuthState>) => {
       settled.current = true;
       clearTimeout(watchdog);
-      setState((prev) => ({ ...prev, loading: false, degraded: false, ...next }));
+      if (!isCancelled) {
+        setState((prev) => ({ ...prev, loading: false, degraded: false, ...next }));
+      }
     };
 
-    try {
-      const auth = getFirebaseAuth();
+    const initAuth = async () => {
+      try {
+        const auth = getFirebaseAuth();
 
       // Check for incoming redirect result first (for redirect login on Firefox, Zen, Opera, Safari, Mobile)
       getRedirectResult(auth)
@@ -104,6 +108,7 @@ export function useAuth(): AuthState & { signOut: () => Promise<void> } {
     }
 
     return () => {
+      isCancelled = true;
       clearTimeout(watchdog);
       unsubscribe?.();
     };

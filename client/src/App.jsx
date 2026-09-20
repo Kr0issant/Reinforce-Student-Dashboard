@@ -210,10 +210,18 @@ export default function App() {
         return;
       }
 
-      if (err.code === 'auth/popup-blocked') {
-        setStatus('error');
-        setErrorMessage('Pop-up was blocked by your browser. Please allow pop-ups for this site in your browser address bar (top right / shield icon) and click Sign In again.');
-        return;
+      if (err.code === 'auth/popup-blocked' || err.code === 'auth/operation-not-supported-in-this-environment') {
+        try {
+          if (discordId) {
+            sessionStorage.setItem('pending_discord_id', discordId);
+          }
+          await signInWithRedirect(auth, googleProvider);
+          return;
+        } catch (rErr) {
+          setStatus('error');
+          setErrorMessage('Failed to start Google sign-in redirect.');
+          return;
+        }
       }
 
       setStatus('error');
