@@ -1,5 +1,5 @@
 # web
-
+deployment for /web: https://reinforce-student-dashboard-xi.vercel.app/
 The Reinforce platform front end — public site, member dashboard, and the
 `/auth` route the Discord bot deep-links to.
 
