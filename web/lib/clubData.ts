@@ -2,6 +2,7 @@ export type TrackType = "Kaggle" | "Product" | "Research" | "General";
 export type HealthStatus = "on_track" | "at_risk" | "need_progress" | "completed";
 export type TicketStatus = "open" | "in_progress" | "resolved" | "pending_approval";
 export type PriorityType = "high" | "medium" | "low";
+export type DifficultyLevel = "Beginner" | "Intermediate" | "Advanced";
 
 export interface UserProfile {
   id: string;
@@ -142,7 +143,7 @@ export interface IdeaItem {
   id: string;
   title: string;
   track: TrackType;
-  difficulty: "Beginner" | "Intermediate" | "Advanced";
+  difficulty: DifficultyLevel;
   skillsRequired: string[];
   learningObjectives: string[];
   description: string;

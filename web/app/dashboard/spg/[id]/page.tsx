@@ -9,7 +9,7 @@ import styles from "./details.module.css";
 export default function SPGDetailsPage() {
   const params = useParams();
   const spgId = (params?.id as string) || "SPG-2024-089";
-  const { spgs, user } = useClub();
+  const { spgs } = useClub();
 
   const [activeTab, setActiveTab] = useState<"overview" | "reports" | "resources" | "team">("overview");
   const [showAddMemberModal, setShowAddMemberModal] = useState(false);

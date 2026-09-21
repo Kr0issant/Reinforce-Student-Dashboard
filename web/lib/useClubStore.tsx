@@ -1,6 +1,6 @@
 "use client";
 
-import React, { createContext, useContext, useState, useEffect } from "react";
+import React, { createContext, useContext, useState } from "react";
 import {
   UserProfile,
   SPGProject,
@@ -16,6 +16,27 @@ import {
   INITIAL_ARTICLES,
   INITIAL_IDEAS,
   INITIAL_LEADERBOARD
+} from "./clubData";
+
+// Pages consume the store and its types from one place, so surface the types the
+// store already builds on. `export type` keeps these erased at build time, which
+// isolatedModules requires.
+export type {
+  TrackType,
+  HealthStatus,
+  TicketStatus,
+  PriorityType,
+  DifficultyLevel,
+  UserProfile,
+  SPGMember,
+  ResourceRequest,
+  MilestoneReport,
+  SPGProject,
+  TicketItem,
+  ClubEvent,
+  ArticleItem,
+  IdeaItem,
+  LeaderboardEntry,
 } from "./clubData";
 
 interface ClubContextType {
@@ -52,7 +73,7 @@ export function ClubProvider({ children }: { children: React.ReactNode }) {
   const [events, setEvents] = useState<ClubEvent[]>(INITIAL_EVENTS);
   const [articles, setArticles] = useState<ArticleItem[]>(INITIAL_ARTICLES);
   const [ideas, setIdeas] = useState<IdeaItem[]>(INITIAL_IDEAS);
-  const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>(INITIAL_LEADERBOARD);
+  const [leaderboard] = useState<LeaderboardEntry[]>(INITIAL_LEADERBOARD);
   const [searchQuery, setSearchQuery] = useState("");
 
   const updateUser = (updated: Partial<UserProfile>) => {

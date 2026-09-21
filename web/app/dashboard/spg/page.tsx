@@ -2,7 +2,7 @@
 
 import React, { useState, useMemo } from "react";
 import Link from "next/link";
-import { useClub, TrackType, HealthStatus, SPGProject } from "@/lib/useClubStore";
+import { useClub, TrackType, SPGProject } from "@/lib/useClubStore";
 import styles from "./spg.module.css";
 
 export default function SPGBrowsePage() {

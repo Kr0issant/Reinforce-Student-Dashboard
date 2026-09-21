@@ -10,7 +10,6 @@ export default function Header() {
   const pathname = usePathname();
   const { user, searchQuery, setSearchQuery } = useClub();
   const [showNotifications, setShowNotifications] = useState(false);
-  const [showUserMenu, setShowUserMenu] = useState(false);
 
   // Compute breadcrumbs and title
   const getPageTitle = () => {

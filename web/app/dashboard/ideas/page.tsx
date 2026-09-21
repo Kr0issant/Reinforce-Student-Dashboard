@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { useClub, TrackType } from "@/lib/useClubStore";
+import { useClub, TrackType, DifficultyLevel } from "@/lib/useClubStore";
 import styles from "./ideas.module.css";
 
 export default function IdeaJarPage() {
@@ -14,7 +14,7 @@ export default function IdeaJarPage() {
   // New Idea form
   const [newTitle, setNewTitle] = useState("");
   const [newTrack, setNewTrack] = useState<TrackType>("Research");
-  const [newDifficulty, setNewDifficulty] = useState<"Beginner" | "Intermediate" | "Advanced">("Intermediate");
+  const [newDifficulty, setNewDifficulty] = useState<DifficultyLevel>("Intermediate");
   const [newSkills, setNewSkills] = useState("PyTorch, Transformers");
   const [newDesc, setNewDesc] = useState("");
 
@@ -204,7 +204,7 @@ export default function IdeaJarPage() {
                   <label>Difficulty</label>
                   <select
                     value={newDifficulty}
-                    onChange={(e) => setNewDifficulty(e.target.value as any)}
+                    onChange={(e) => setNewDifficulty(e.target.value as DifficultyLevel)}
                     className={styles.inputField}
                   >
                     <option value="Beginner">Beginner</option>

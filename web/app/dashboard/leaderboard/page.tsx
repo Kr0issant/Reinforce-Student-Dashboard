@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { useClub, TrackType } from "@/lib/useClubStore";
+import { useClub } from "@/lib/useClubStore";
 import styles from "./leaderboard.module.css";
 
 export default function LeaderboardPage() {
