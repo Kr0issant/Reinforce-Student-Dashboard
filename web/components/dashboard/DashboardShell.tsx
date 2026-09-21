@@ -5,6 +5,7 @@ import Link from "next/link";
 import Sidebar from "./Sidebar";
 import Header from "./Header";
 import { ClubProvider } from "@/lib/useClubStore";
+import RequireAuth from "./RequireAuth";
 import styles from "./DashboardShell.module.css";
 
 interface DashboardShellProps {
@@ -12,6 +13,14 @@ interface DashboardShellProps {
 }
 
 export default function DashboardShell({ children }: DashboardShellProps) {
+  return (
+    <RequireAuth>
+      <DashboardChrome>{children}</DashboardChrome>
+    </RequireAuth>
+  );
+}
+
+function DashboardChrome({ children }: DashboardShellProps) {
   const [showQuickModal, setShowQuickModal] = useState(false);
 
   return (

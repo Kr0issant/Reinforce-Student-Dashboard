@@ -163,3 +163,24 @@
     padding: 16px;
   }
 }
+
+/* Shown while the session is still unknown, and while redirecting a visitor
+   who is not signed in. Matches the shell's background so the handover to
+   /auth does not flash a different colour. */
+.authGate {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 2rem;
+  background-color: #0C0C0C;
+  color: rgba(255, 255, 255, 0.72);
+  font-family: var(--font-jakarta), system-ui, sans-serif;
+  font-size: 0.95rem;
+  text-align: center;
+}
+
+.authGate a {
+  color: #E5B731;
+  text-decoration: underline;
+}
