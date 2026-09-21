@@ -10,6 +10,7 @@ import styles from "./SiteNav.module.css";
 // admin entry path — so they are deliberately absent rather than linked to a
 // 404 or filled with placeholder content. Add the link when the page is real.
 const LINKS = [
+  { href: "/dashboard", label: "Dashboard" },
   { href: "/tracks", label: "Tracks" },
   { href: "/projects", label: "Projects" },
 ];

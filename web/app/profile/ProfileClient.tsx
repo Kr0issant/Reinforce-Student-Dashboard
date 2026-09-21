@@ -1,307 +1,388 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import Pill from "@/components/Pill";
-import SiteFooter from "@/components/SiteFooter";
-import { api, ApiError, type SocialLinks, type StudentProfile } from "@/lib/api";
-import { useAuth } from "@/lib/useAuth";
+import React, { useState } from "react";
+import Link from "next/link";
+import { useClub } from "@/lib/useClubStore";
 import styles from "./profile.module.css";
 
-type LinkKey = "github" | "kaggle" | "linkedin";
-
-const LINK_FIELDS: { key: LinkKey; label: string; placeholder: string; host: string }[] = [
-  { key: "github", label: "GitHub", placeholder: "https://github.com/username", host: "github.com" },
-  { key: "kaggle", label: "Kaggle", placeholder: "https://kaggle.com/username", host: "kaggle.com" },
-  { key: "linkedin", label: "LinkedIn", placeholder: "https://linkedin.com/in/username", host: "linkedin.com" },
-];
-
-const MAX_SKILLS = 30;
-const MAX_SKILL_LEN = 40;
-
-/** Empty is valid. Otherwise it must parse as a URL on the expected host. */
-function linkError(value: string, host: string): string | null {
-  const v = value.trim();
-  if (!v) return null;
-  let url: URL;
-  try {
-    url = new URL(v.startsWith("http") ? v : `https://${v}`);
-  } catch {
-    return "That doesn't look like a link.";
-  }
-  const h = url.hostname.replace(/^www\./, "");
-  if (h !== host && !h.endsWith(`.${host}`)) return `Should be a ${host} link.`;
-  return null;
-}
-
 export default function ProfileClient() {
-  const { user, token, loading, configured, degraded, signOut } = useAuth();
+  const { user, updateUser } = useClub();
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [copied, setCopied] = useState(false);
 
-  const [profile, setProfile] = useState<StudentProfile | null>(null);
-  const [skills, setSkills] = useState<string[]>([]);
-  const [links, setLinks] = useState<Record<LinkKey, string>>({ github: "", kaggle: "", linkedin: "" });
-  const [skillDraft, setSkillDraft] = useState("");
+  // Edit form state
+  const [name, setName] = useState(user.name);
+  const [bio, setBio] = useState(user.bio);
+  const [location, setLocation] = useState(user.location);
+  const [newSkill, setNewSkill] = useState("");
+  const [skills, setSkills] = useState<string[]>(user.skills);
 
-  const [loadError, setLoadError] = useState("");
-  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
-  const [saveError, setSaveError] = useState("");
-  const [unlinking, setUnlinking] = useState(false);
+  const handleShare = () => {
+    if (typeof window !== "undefined") {
+      navigator.clipboard.writeText(window.location.href);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
 
-  const loadedFor = useRef<string | null>(null);
-
-  // Load once per token. `phase`-style state is deliberately not a dependency
-  // here — see the note in AuthClient about effects that re-trigger themselves.
-  useEffect(() => {
-    if (!token || loadedFor.current === token) return;
-    loadedFor.current = token;
-
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await api.me(token);
-        if (cancelled) return;
-        applyProfile(res.user);
-      } catch (err) {
-        if (cancelled) return;
-        setLoadError(err instanceof Error ? err.message : "Could not load your profile.");
+  const handleAddSkill = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" && newSkill.trim()) {
+      e.preventDefault();
+      if (!skills.includes(newSkill.trim())) {
+        setSkills([...skills, newSkill.trim()]);
       }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [token]);
-
-  function applyProfile(u: StudentProfile) {
-    setProfile(u);
-    setSkills(u.skills ?? []);
-    setLinks({
-      github: u.social_links?.github ?? "",
-      kaggle: u.social_links?.kaggle ?? "",
-      linkedin: u.social_links?.linkedin ?? "",
-    });
-  }
-
-  const addSkill = useCallback(() => {
-    const value = skillDraft.trim().slice(0, MAX_SKILL_LEN);
-    if (!value) return;
-    setSkills((prev) => {
-      // Case-insensitive dedupe, so "PyTorch" and "pytorch" don't both appear.
-      if (prev.some((s) => s.toLowerCase() === value.toLowerCase())) return prev;
-      if (prev.length >= MAX_SKILLS) return prev;
-      return [...prev, value];
-    });
-    setSkillDraft("");
-    setSaveState("idle");
-  }, [skillDraft]);
-
-  const errors = LINK_FIELDS.map((f) => linkError(links[f.key], f.host));
-  const hasErrors = errors.some(Boolean);
-
-  async function save() {
-    if (!token || hasErrors) return;
-    setSaveState("saving");
-    setSaveError("");
-    try {
-      // social_links is replaced wholesale by the API, so discord has to be
-      // carried through explicitly or saving here would wipe it.
-      const social_links: SocialLinks = {
-        github: links.github.trim() || null,
-        kaggle: links.kaggle.trim() || null,
-        linkedin: links.linkedin.trim() || null,
-        discord: profile?.social_links?.discord ?? null,
-      };
-      const res = await api.updateProfile(token, { skills, social_links });
-      applyProfile(res.user);
-      setSaveState("saved");
-    } catch (err) {
-      setSaveState("error");
-      setSaveError(
-        err instanceof ApiError ? err.message : "Could not save. Try again in a moment.",
-      );
+      setNewSkill("");
     }
-  }
+  };
 
-  async function unlink() {
-    if (!token) return;
-    setUnlinking(true);
-    try {
-      const res = await api.unlinkDiscord(token);
-      applyProfile(res.user);
-    } catch (err) {
-      setSaveError(err instanceof ApiError ? err.message : "Could not unlink.");
-    } finally {
-      setUnlinking(false);
-    }
-  }
+  const handleRemoveSkill = (skillToRemove: string) => {
+    setSkills(skills.filter((s) => s !== skillToRemove));
+  };
 
-  /* ------------------------------------------------------------- gates */
-
-  if (!configured) {
-    return (
-      <main className={styles.centre}>
-        <p className={styles.note}>Sign-in isn&rsquo;t configured on this deployment.</p>
-      </main>
-    );
-  }
-  if (loading) {
-    return (
-      <main className={styles.centre} aria-busy="true">
-        <p className={styles.note}>Checking your session&hellip;</p>
-      </main>
-    );
-  }
-  if (!user) {
-    return (
-      <main className={styles.centre}>
-        <h1 className={`display ${styles.gateTitle}`}>
-          Sign in to edit <em>your profile.</em>
-        </h1>
-        <p className={styles.note}>
-          {degraded
-            ? "We couldn't reach the sign-in service. Check your connection and try again."
-            : "Members only. Use your @sst.scaler.com account."}
-        </p>
-        <Pill href="/auth" variant="filled">Sign in</Pill>
-      </main>
-    );
-  }
+  const handleSaveProfile = (e: React.FormEvent) => {
+    e.preventDefault();
+    updateUser({
+      name,
+      bio,
+      location,
+      skills
+    });
+    setShowEditModal(false);
+  };
 
   return (
-    <>
-      <main>
-        <section className={`section-dark grid-bg ${styles.head}`}>
-          <div className={`page ${styles.headInner}`}>
-            <div>
-              <p className={`mono ${styles.kick}`}>{user.email}</p>
-              <h1 className={`display ${styles.title}`}>
-                Your <em>profile.</em>
-              </h1>
+    <div className={styles.profileContainer}>
+      {/* Top Profile Banner Hero */}
+      <section className={styles.heroCard}>
+        <div className={styles.avatarLarge}>
+          {user.initials}
+        </div>
+
+        <div className={styles.heroDetails}>
+          <div className={styles.heroTopRow}>
+            <div className={styles.nameWrap}>
+              <h1 className={styles.heroName}>{user.name}</h1>
+              <span className={styles.tierPill}>{user.tier.toUpperCase()}</span>
             </div>
-            <div className={styles.headActions}>
-              <Pill href="/dashboard">Dashboard</Pill>
-              <Pill onClick={signOut}>Sign out</Pill>
+
+            <div className={styles.heroActions}>
+              <button
+                type="button"
+                className={styles.editProfileBtn}
+                onClick={() => setShowEditModal(true)}
+              >
+                Edit Profile
+              </button>
+              <button
+                type="button"
+                className={styles.shareProfileBtn}
+                onClick={handleShare}
+              >
+                {copied ? "Link Copied! ✓" : "Share Profile"}
+              </button>
             </div>
           </div>
-        </section>
 
-        <section className={`section-paper on-light ${styles.body}`}>
-          <div className="page">
-            {loadError ? <p className={styles.error} role="alert">{loadError}</p> : null}
+          <p className={styles.heroBio}>{user.bio}</p>
 
-            {/* ---------------------------------------------------- skills */}
-            <div className={styles.block}>
-              <div className={styles.blockHead}>
-                <h2 className={styles.blockTitle}>Skills</h2>
-                <p className={`mono ${styles.count}`}>{skills.length}/{MAX_SKILLS}</p>
+          <div className={styles.metaRow}>
+            <div className={styles.metaItem}>
+              <span className={styles.metaIcon}>📍</span>
+              <span>{user.location}</span>
+            </div>
+            <div className={styles.metaItem}>
+              <span className={styles.metaIcon}>✉</span>
+              <span>{user.email}</span>
+            </div>
+            <div className={styles.metaItem}>
+              <span className={styles.metaIcon}>📅</span>
+              <span>{user.joinedDate}</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Main Grid: Left Column & Right Column */}
+      <div className={styles.profileGrid}>
+        {/* Left Column (Wide) */}
+        <div className={styles.leftCol}>
+          {/* Technical Expertise */}
+          <div className={styles.sectionCard}>
+            <div className={styles.sectionTitleRow}>
+              <span className={styles.goldBar} />
+              <h2 className={styles.sectionTitle}>Technical Expertise</h2>
+            </div>
+            <div className={styles.skillsWrap}>
+              {user.skills.map((skill) => (
+                <span key={skill} className={styles.skillPill}>
+                  {skill}
+                </span>
+              ))}
+            </div>
+          </div>
+
+          {/* Posted Articles & Papers */}
+          <div className={styles.sectionCard}>
+            <div className={styles.sectionTitleRow}>
+              <div className={styles.titleWithBar}>
+                <span className={styles.goldBar} />
+                <h2 className={styles.sectionTitle}>Posted Articles & Papers</h2>
               </div>
-              <p className={styles.help}>
-                What you work with. These show on your club record.
-              </p>
+              <Link href="/dashboard/articles" className={styles.sectionLink}>
+                View All Hub
+              </Link>
+            </div>
 
-              <div className={styles.tagRow}>
-                {skills.map((skill) => (
-                  <span key={skill} className={styles.tag}>
-                    {skill}
-                    <button
-                      type="button"
-                      className={styles.tagX}
-                      aria-label={`Remove ${skill}`}
-                      onClick={() => {
-                        setSkills((prev) => prev.filter((s) => s !== skill));
-                        setSaveState("idle");
-                      }}
-                    >
-                      ×
-                    </button>
+            <div className={styles.articlesList}>
+              <Link href="/dashboard/articles" className={styles.articleRow}>
+                <div className={styles.articleIcon}>
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                    <polyline points="14 2 14 8 20 8" />
+                  </svg>
+                </div>
+                <div className={styles.articleContent}>
+                  <h3 className={styles.articleTitle}>
+                    Comparative Analysis of GNN vs LSTM in Seismic Early Warning
+                  </h3>
+                  <span className={styles.articleMeta}>
+                    PUBLISHED OCT 12, 2024 • 1.2K VIEWS
                   </span>
-                ))}
-                {skills.length === 0 ? (
-                  <span className={styles.empty}>Nothing added yet.</span>
-                ) : null}
-              </div>
+                </div>
+                <span className={styles.rowChevron}>›</span>
+              </Link>
 
-              <div className={styles.addRow}>
-                <input
-                  className={styles.input}
-                  value={skillDraft}
-                  maxLength={MAX_SKILL_LEN}
-                  placeholder="Add a skill — PyTorch, Docker, Next.js"
-                  onChange={(e) => setSkillDraft(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      addSkill();
-                    }
-                  }}
-                />
-                <Pill onClick={addSkill} disabled={!skillDraft.trim() || skills.length >= MAX_SKILLS}>
-                  Add
-                </Pill>
-              </div>
-            </div>
-
-            {/* ----------------------------------------------------- links */}
-            <div className={styles.block}>
-              <h2 className={styles.blockTitle}>Links</h2>
-              <p className={styles.help}>Optional. Leave blank to remove one.</p>
-
-              <div className={styles.fields}>
-                {LINK_FIELDS.map((field, i) => (
-                  <label key={field.key} className={styles.field}>
-                    <span className={`mono ${styles.fieldLabel}`}>{field.label}</span>
-                    <input
-                      className={`${styles.input} ${errors[i] ? styles.inputBad : ""}`}
-                      value={links[field.key]}
-                      placeholder={field.placeholder}
-                      inputMode="url"
-                      onChange={(e) => {
-                        setLinks((prev) => ({ ...prev, [field.key]: e.target.value }));
-                        setSaveState("idle");
-                      }}
-                    />
-                    {errors[i] ? <span className={styles.fieldErr}>{errors[i]}</span> : null}
-                  </label>
-                ))}
-              </div>
-            </div>
-
-            {/* --------------------------------------------------- discord */}
-            <div className={styles.block}>
-              <h2 className={styles.blockTitle}>Discord</h2>
-              {profile?.discord_id ? (
-                <>
-                  <p className={styles.help}>
-                    Linked as <code>{profile.discord_id}</code>. This is how your project groups
-                    and tickets reach your dashboard.
-                  </p>
-                  <Pill onClick={unlink} disabled={unlinking}>
-                    {unlinking ? "Unlinking…" : "Unlink Discord"}
-                  </Pill>
-                </>
-              ) : (
-                <>
-                  <p className={styles.help}>
-                    Not linked. Run <code>/auth</code> in the club Discord and follow the link it
-                    sends you.
-                  </p>
-                  <Pill href="/auth">Link Discord</Pill>
-                </>
-              )}
-            </div>
-
-            {/* ------------------------------------------------------- save */}
-            <div className={styles.saveBar}>
-              <Pill variant="filled" onClick={save} disabled={saveState === "saving" || hasErrors}>
-                {saveState === "saving" ? "Saving…" : "Save changes"}
-              </Pill>
-              {saveState === "saved" ? <span className={styles.ok}>Saved.</span> : null}
-              {hasErrors ? <span className={styles.warnText}>Fix the links above first.</span> : null}
-              {saveState === "error" ? <span className={styles.errText}>{saveError}</span> : null}
+              <Link href="/dashboard/articles" className={styles.articleRow}>
+                <div className={styles.articleIcon}>
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                    <polyline points="14 2 14 8 20 8" />
+                  </svg>
+                </div>
+                <div className={styles.articleContent}>
+                  <h3 className={styles.articleTitle}>
+                    Optimizing Batch Processing for High-Frequency Sensor Data
+                  </h3>
+                  <span className={styles.articleMeta}>
+                    PUBLISHED SEPT 28, 2024 • 840 VIEWS
+                  </span>
+                </div>
+                <span className={styles.rowChevron}>›</span>
+              </Link>
             </div>
           </div>
-        </section>
-      </main>
-      <SiteFooter />
-    </>
+
+          {/* Verified SPG Submissions */}
+          <div className={styles.sectionCard}>
+            <div className={styles.sectionTitleRow}>
+              <div className={styles.titleWithBar}>
+                <span className={styles.goldBar} />
+                <h2 className={styles.sectionTitle}>Verified SPG Submissions</h2>
+              </div>
+              <span className={styles.approvalRateBadge}>
+                100% Approval Rate
+              </span>
+            </div>
+
+            <div className={styles.submissionsList}>
+              {user.verifiedSubmissions.map((sub) => (
+                <div key={sub.id} className={styles.submissionRow}>
+                  <div className={styles.checkCircle}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+                      <polyline points="20 6 9 17 4 12" />
+                    </svg>
+                  </div>
+                  <span className={styles.submissionTitle}>{sub.title}</span>
+                  <span className={styles.submissionTime}>{sub.timestamp}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Right Column (Narrow) */}
+        <div className={styles.rightCol}>
+          {/* CONNECT & LINKS */}
+          <div className={styles.widgetCard}>
+            <h3 className={styles.widgetHeader}>CONNECT & LINKS</h3>
+            <div className={styles.linksList}>
+              <a
+                href={user.links.github}
+                target="_blank"
+                rel="noreferrer"
+                className={styles.linkItem}
+              >
+                <div className={styles.linkLeft}>
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22" />
+                  </svg>
+                  <span>GitHub</span>
+                </div>
+                <span className={styles.externalIcon}>↗</span>
+              </a>
+
+              <a
+                href={user.links.kaggle}
+                target="_blank"
+                rel="noreferrer"
+                className={styles.linkItem}
+              >
+                <div className={styles.linkLeft}>
+                  <span className={styles.kaggleIcon}>k</span>
+                  <span>Kaggle Profile</span>
+                </div>
+                <span className={styles.externalIcon}>↗</span>
+              </a>
+
+              <div className={styles.linkItem}>
+                <div className={styles.linkLeft}>
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M18 6h-5a2 2 0 0 0-2 2v3a2 2 0 0 0 2 2h5l3 3V8a2 2 0 0 0-2-2Z" />
+                  </svg>
+                  <span>{user.links.discord}</span>
+                </div>
+                <span className={styles.onlineBadge}>ONLINE</span>
+              </div>
+
+              <a
+                href={user.links.portfolio}
+                target="_blank"
+                rel="noreferrer"
+                className={styles.linkItem}
+              >
+                <div className={styles.linkLeft}>
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <circle cx="12" cy="12" r="10" />
+                    <line x1="2" y1="12" x2="22" y2="12" />
+                    <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+                  </svg>
+                  <span>Portfolio</span>
+                </div>
+                <span className={styles.externalIcon}>↗</span>
+              </a>
+            </div>
+          </div>
+
+          {/* EVENT WINS */}
+          <div className={styles.widgetCard}>
+            <h3 className={styles.widgetHeader}>EVENT WINS</h3>
+            <div className={styles.winsList}>
+              {user.eventWins.map((win) => (
+                <div key={win.id} className={styles.winCard}>
+                  <div className={styles.trophyIcon}>🏆</div>
+                  <div className={styles.winInfo}>
+                    <h4 className={styles.winTitle}>{win.title}</h4>
+                    <span className={styles.winPlacement}>
+                      {win.placement} • {win.track}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* CONTRIBUTION STATS */}
+          <div className={styles.widgetCard}>
+            <h3 className={styles.widgetHeader}>CONTRIBUTION STATS</h3>
+            <div className={styles.statsGrid}>
+              <div className={styles.statBox}>
+                <span className={styles.statNum}>12</span>
+                <span className={styles.statLabel}>SPG SUBMISSIONS</span>
+              </div>
+              <div className={styles.statBox}>
+                <span className={styles.statNum}>05</span>
+                <span className={styles.statLabel}>HOT ARTICLES</span>
+              </div>
+            </div>
+
+            <div className={styles.reputationBar}>
+              <span className={styles.repLabel}>REPUTATION SCORE</span>
+              <span className={styles.repValue}>{user.reputation}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Edit Profile Modal */}
+      {showEditModal && (
+        <div className={styles.modalOverlay} onClick={() => setShowEditModal(false)}>
+          <div className={styles.editModal} onClick={(e) => e.stopPropagation()}>
+            <div className={styles.modalHeader}>
+              <h3>Edit Student Profile</h3>
+              <button type="button" className={styles.closeBtn} onClick={() => setShowEditModal(false)}>✕</button>
+            </div>
+            <form onSubmit={handleSaveProfile} className={styles.editForm}>
+              <div className={styles.formGroup}>
+                <label>Full Name</label>
+                <input
+                  type="text"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  className={styles.inputField}
+                  required
+                />
+              </div>
+
+              <div className={styles.formGroup}>
+                <label>Bio / Research Interests</label>
+                <textarea
+                  rows={3}
+                  value={bio}
+                  onChange={(e) => setBio(e.target.value)}
+                  className={styles.textareaField}
+                  required
+                />
+              </div>
+
+              <div className={styles.formGroup}>
+                <label>Campus Location / Lab</label>
+                <input
+                  type="text"
+                  value={location}
+                  onChange={(e) => setLocation(e.target.value)}
+                  className={styles.inputField}
+                  required
+                />
+              </div>
+
+              <div className={styles.formGroup}>
+                <label>Skills & Frameworks (Press Enter to add)</label>
+                <input
+                  type="text"
+                  placeholder="e.g. Transformers, JAX, Triton"
+                  value={newSkill}
+                  onChange={(e) => setNewSkill(e.target.value)}
+                  onKeyDown={handleAddSkill}
+                  className={styles.inputField}
+                />
+                <div className={styles.skillsTagList}>
+                  {skills.map((s) => (
+                    <span key={s} className={styles.editableSkillTag}>
+                      {s}
+                      <button
+                        type="button"
+                        className={styles.removeTagBtn}
+                        onClick={() => handleRemoveSkill(s)}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              <div className={styles.modalActions}>
+                <button type="button" className={styles.cancelBtn} onClick={() => setShowEditModal(false)}>
+                  Cancel
+                </button>
+                <button type="submit" className={styles.saveBtn}>
+                  Save Changes
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
