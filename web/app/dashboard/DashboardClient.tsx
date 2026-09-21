@@ -1,232 +1,198 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import Pill from "@/components/Pill";
-import SiteFooter from "@/components/SiteFooter";
-import {
-  api,
-  CATEGORY_LABEL,
-  STATUS_LABEL,
-  type TicketListResponse,
-  type TicketSummary,
-} from "@/lib/api";
-import { useAuth } from "@/lib/useAuth";
+import React from "react";
+import Link from "next/link";
+import { useClub, TrackType } from "@/lib/useClubStore";
+import { HeadlineCarousel, CalendarWidget } from "@/components/dashboard/DashboardWidgets";
 import styles from "./dashboard.module.css";
 
-function relative(iso?: string | null): string {
-  if (!iso) return "—";
-  const then = new Date(iso).getTime();
-  if (Number.isNaN(then)) return "—";
-  const days = Math.floor((Date.now() - then) / 86_400_000);
-  if (days <= 0) return "today";
-  if (days === 1) return "yesterday";
-  if (days < 30) return `${days}d ago`;
-  const months = Math.floor(days / 30);
-  return `${months}mo ago`;
-}
-
 export default function DashboardClient() {
-  const { user, token, loading, configured, degraded, signOut } = useAuth();
-  const [data, setData] = useState<TicketListResponse | null>(null);
-  const [error, setError] = useState<string>("");
-  const [fetching, setFetching] = useState(false);
+  const { spgs, events } = useClub();
 
-  useEffect(() => {
-    if (!token) return;
-    let cancelled = false;
+  const getTrackTagClass = (track: TrackType) => {
+    switch (track) {
+      case "Kaggle":
+        return styles.trackKaggle;
+      case "Product":
+        return styles.trackProduct;
+      case "Research":
+        return styles.trackResearch;
+      default:
+        return styles.trackGeneral;
+    }
+  };
 
-    (async () => {
-      setFetching(true);
-      try {
-        const res = await api.myTickets(token);
-        if (!cancelled) setData(res);
-      } catch (err) {
-        if (!cancelled) {
-          setError(err instanceof Error ? err.message : "Could not load your activity.");
-        }
-      } finally {
-        if (!cancelled) setFetching(false);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [token]);
-
-  if (!configured) {
-    return (
-      <main className={styles.centre}>
-        <p className={styles.note}>
-          This deployment has no Firebase configuration, so sign-in is unavailable.
-        </p>
-      </main>
-    );
-  }
-
-  if (loading) {
-    return (
-      <main className={styles.centre} aria-busy="true">
-        <p className={styles.note}>Checking your session…</p>
-      </main>
-    );
-  }
-
-  if (!user) {
-    return (
-      <main className={styles.centre}>
-        <h1 className={`display ${styles.gateTitle}`}>
-          Sign in to see <em>your record.</em>
-        </h1>
-        <p className={styles.note}>
-          {degraded
-            ? "We couldn't reach the sign-in service. Check your connection and try again."
-            : "Members only. Use your @sst.scaler.com account."}
-        </p>
-        <Pill href="/auth" variant="filled">Sign in</Pill>
-      </main>
-    );
-  }
-
-  const tickets = data?.tickets ?? [];
-  const spgs = tickets.filter((t) => t.category === "spg_registration");
-  const active = tickets.filter((t) => t.status === "open" || t.status === "in_progress");
-  const ideas = tickets.filter((t) => t.category === "idea_jar");
+  const getHealthBadgeClass = (health: string) => {
+    switch (health) {
+      case "on_track":
+        return styles.badgeOnTrack;
+      case "need_progress":
+        return styles.badgeNeedProgress;
+      case "at_risk":
+        return styles.badgeAtRisk;
+      default:
+        return styles.badgeNeutral;
+    }
+  };
 
   return (
-    <>
-      <main>
-        {/* --------------------------------------------------- header (dark) */}
-        <section className={`section-dark grid-bg ${styles.head}`}>
-          <div className={`page ${styles.headInner}`}>
-            <div>
-              <p className={`mono ${styles.kick}`}>
-                Verified · {user.email}
-              </p>
-              <h1 className={`display ${styles.title}`}>
-                Welcome back,
-                <br />
-                <em>{user.displayName?.split(" ")[0] ?? "member"}.</em>
-              </h1>
+    <div className={styles.dashboardContainer}>
+      {/* Top Section: Big Yellow Headline Carousel (Left) & Upcoming Events (Right) */}
+      <section className={styles.topHeroGrid}>
+        {/* Big Yellow Headline Carousel */}
+        <div className={styles.carouselCol}>
+          <HeadlineCarousel />
+        </div>
+
+        {/* Upcoming Events Box (Pushed up to the top right) */}
+        <div className={styles.eventsCol}>
+          <div className={styles.widgetCard}>
+            <div className={styles.widgetCardHeader}>
+              <div className={styles.widgetTitleGroup}>
+                <span className={styles.eventsHeaderIcon}>⚡</span>
+                <h3 className={styles.widgetTitle}>Upcoming Events</h3>
+              </div>
+              <Link href="/dashboard/events" className={styles.smallGoldLink}>
+                View All →
+              </Link>
             </div>
-            <div className={styles.headActions}>
-              <Pill href="/profile">Edit profile</Pill>
-              <Pill href="/">Back to the site</Pill>
-              <Pill onClick={signOut}>Sign out</Pill>
+
+            <div className={styles.eventsList}>
+              {events.slice(0, 2).map((ev) => (
+                <div key={ev.id} className={styles.eventItem}>
+                  <div className={styles.eventDateBadge}>
+                    <span className={styles.dateMonth}>{ev.monthDay.month}</span>
+                    <span className={styles.dateDay}>{ev.monthDay.day}</span>
+                  </div>
+                  <div className={styles.eventInfo}>
+                    <h4 className={styles.eventTitle}>{ev.title}</h4>
+                    <span className={styles.eventLocation}>
+                      {ev.location.includes("Lab") ? "📍 " : "👥 "}
+                      {ev.location}
+                    </span>
+                  </div>
+                </div>
+              ))}
             </div>
+
+            <Link href="/dashboard/events" className={styles.calendarLink}>
+              View Event Calendar
+            </Link>
           </div>
-        </section>
+        </div>
+      </section>
 
-        {/* ---------------------------------------------------- figures (paper) */}
-        <section className={`section-paper on-light ${styles.figuresWrap}`}>
-          <div className="page">
-            {error ? (
-              <p className={styles.error} role="alert">{error}</p>
-            ) : null}
+      {/* Main Body Grid: Current Projects (Left) & Interactive Calendar (Right) */}
+      <div className={styles.mainLayoutGrid}>
+        {/* Left Column: Current Projects (SPG) */}
+        <div className={styles.projectsSection}>
+          <div className={styles.sectionHeaderBar}>
+            <div className={styles.sectionTitleWithBar}>
+              <span className={styles.yellowBar} />
+              <h2 className={styles.sectionHeading}>Current Projects (SPG)</h2>
+            </div>
+            <Link href="/dashboard/spg" className={styles.viewAllLink}>
+              View All Management
+            </Link>
+          </div>
 
-            {data && !data.linked ? (
-              <div className={styles.linkPrompt}>
-                <div>
-                  <h2 className={styles.promptTitle}>Your Discord isn&rsquo;t linked yet</h2>
-                  <p className={styles.promptBody}>
-                    Project groups, resource requests and ideas are filed in Discord. Run{" "}
-                    <code>/auth</code> in the club server and follow the link it sends you — this
-                    page will fill itself in.
-                  </p>
+          <div className={styles.spgList}>
+            {spgs.slice(0, 3).map((spg) => (
+              <div key={spg.id} className={styles.projectCard}>
+                <div className={styles.cardHeader}>
+                  <div className={styles.cardTags}>
+                    <span className={`${styles.trackTag} ${getTrackTagClass(spg.track)}`}>
+                      {spg.track.toUpperCase()} TRACK
+                    </span>
+                    <span className={styles.projectCode}>ID: {spg.id}</span>
+                  </div>
+                  <span className={`${styles.healthBadge} ${getHealthBadgeClass(spg.health)}`}>
+                    {spg.health === "on_track"
+                      ? "On Track"
+                      : spg.health === "need_progress"
+                      ? "Need Progress"
+                      : "At Risk"}
+                  </span>
+                </div>
+
+                <Link href={`/dashboard/spg/${spg.id}`} className={styles.projectTitleLink}>
+                  <h3 className={styles.projectTitle}>{spg.title}</h3>
+                </Link>
+                <p className={styles.projectDesc}>{spg.description}</p>
+
+                <div className={styles.cardFooter}>
+                  <div className={styles.avatarStack}>
+                    {spg.members.slice(0, 2).map((m, idx) => (
+                      <div key={idx} className={styles.memberAvatar}>
+                        {m.initials}
+                      </div>
+                    ))}
+                    {spg.members.length > 2 && (
+                      <div className={styles.avatarMore}>
+                        +{spg.members.length - 2}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className={styles.cardActionsRight}>
+                    <div className={styles.metaSubtext}>
+                      {spg.id === "SPG-2024-089" ? (
+                        <>
+                          <span className={styles.metaLabel}>NEXT REPORT</span>
+                          <span className={styles.metaVal}>In 2 days</span>
+                        </>
+                      ) : (
+                        <>
+                          <span className={styles.metaLabel}>RESOURCES</span>
+                          <span className={styles.metaVal}>Pending Review</span>
+                        </>
+                      )}
+                    </div>
+
+                    {spg.id === "SPG-2024-089" ? (
+                      <Link
+                        href={`/dashboard/spg/${spg.id}/report`}
+                        className={styles.submitReportBtn}
+                      >
+                        Submit Report
+                      </Link>
+                    ) : (
+                      <Link
+                        href={`/dashboard/spg/${spg.id}`}
+                        className={styles.manageResourcesBtn}
+                      >
+                        Manage Resources
+                      </Link>
+                    )}
+                  </div>
                 </div>
               </div>
-            ) : null}
-
-            <dl className={styles.figures}>
-              <Figure value={spgs.length} label="Project groups" busy={fetching} />
-              <Figure value={active.length} label="Active items" busy={fetching} />
-              <Figure value={ideas.length} label="Ideas filed" busy={fetching} />
-            </dl>
+            ))}
           </div>
-        </section>
+        </div>
 
-        {/* ------------------------------------------------------ mirror (paper) */}
-        <section className={`section-paper on-light ${styles.listWrap}`}>
-          <div className="page">
-            <div className={styles.listHead}>
-              <h2 className={styles.listTitle}>From your Discord activity</h2>
-              <p className={`mono ${styles.listNote}`}>Read-only mirror</p>
+        {/* Right Column: Calendar Widget & Quick Resources */}
+        <div className={styles.sidebarWidgets}>
+          {/* Interactive Calendar Widget (Directly below Upcoming Events) */}
+          <CalendarWidget />
+
+          {/* Quick Idea Jar Preview */}
+          <div className={styles.widgetCard}>
+            <div className={styles.widgetCardHeader}>
+              <div className={styles.widgetTitleGroup}>
+                <span className={styles.eventsHeaderIcon}>💡</span>
+                <h3 className={styles.widgetTitle}>Idea Jar</h3>
+              </div>
+              <Link href="/dashboard/ideas" className={styles.smallGoldLink}>
+                Browse All →
+              </Link>
             </div>
-
-            {fetching && !data ? (
-              <ul className={styles.list} aria-busy="true">
-                {[0, 1, 2].map((i) => (
-                  <li key={i} className={`${styles.row} ${styles.skeleton}`} />
-                ))}
-              </ul>
-            ) : tickets.length === 0 ? (
-              <p className={styles.empty}>
-                {data?.linked
-                  ? "Nothing filed yet. Register a project group or drop an idea in the Idea Jar from the club Discord, and it will appear here."
-                  : "Link your Discord account to see what you've filed."}
-              </p>
-            ) : (
-              <ul className={styles.list}>
-                {tickets.map((t) => (
-                  <TicketRow key={t.id} ticket={t} />
-                ))}
-              </ul>
-            )}
-
-            <p className={styles.fine}>
-              Discord is the only place to file these. This page reflects the same records — it
-              never writes to them.
+            <p className={styles.ideaJarPrompt}>
+              Need inspiration for your next SPG? Grab a curated AI/ML research proposal or product idea from core.
             </p>
           </div>
-        </section>
-      </main>
-
-      <SiteFooter />
-    </>
-  );
-}
-
-function Figure({ value, label, busy }: { value: number; label: string; busy: boolean }) {
-  return (
-    <div className={styles.figure}>
-      {/* Width is reserved by the element, so nothing shifts when the number lands. */}
-      <dd className={styles.figureValue} aria-busy={busy}>{busy ? "—" : value}</dd>
-      <dt className={`mono ${styles.figureLabel}`}>{label}</dt>
+        </div>
+      </div>
     </div>
   );
-}
-
-function TicketRow({ ticket }: { ticket: TicketSummary }) {
-  const live = ticket.status === "open" || ticket.status === "in_progress";
-  const body = (
-    <>
-      <span className={`${styles.dot} ${live ? styles.dotLive : ""}`} aria-hidden />
-      <span className={styles.rowMain}>
-        <span className={styles.rowTitle}>{ticket.title}</span>
-        <span className={styles.rowMeta}>
-          {CATEGORY_LABEL[ticket.category] ?? ticket.category}
-        </span>
-      </span>
-      <span className={styles.rowStatus}>{STATUS_LABEL[ticket.status] ?? ticket.status}</span>
-      <span className={`mono ${styles.rowAge}`}>{relative(ticket.updated_at ?? ticket.created_at)}</span>
-    </>
-  );
-
-  if (ticket.thread_url) {
-    return (
-      <li className={styles.row}>
-        <a
-          className={styles.rowLink}
-          href={ticket.thread_url}
-          target="_blank"
-          rel="noreferrer noopener"
-          title="Open the Discord thread"
-        >
-          {body}
-        </a>
-      </li>
-    );
-  }
-
-  return <li className={`${styles.row} ${styles.rowStatic}`}>{body}</li>;
 }
