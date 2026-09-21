@@ -89,6 +89,8 @@ export type VerifyDiscordResponse = {
   user: StudentProfile;
   bot_response?: {
     status?: "bot_warning" | "bot_unreachable" | string;
+    /** Set when the bot service answered with an HTTP error. */
+    status_code?: number;
     detail?: string;
     role_granted?: string;
   };

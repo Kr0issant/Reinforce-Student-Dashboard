@@ -124,7 +124,7 @@ export default function AuthClient() {
           // what actually happened rather than claiming a role was granted.
           const botStatus = res.bot_response?.status;
           if (botStatus === "bot_warning" || botStatus === "bot_unreachable") {
-            setBotIssue(res.bot_response?.detail ?? "The bot could not be reached.");
+            setBotIssue(res.bot_response?.detail ?? "the bot service could not be reached");
             setRoleGranted("");
           } else {
             setRoleGranted(res.role_granted ?? "Verified Member");
@@ -202,9 +202,10 @@ export default function AuthClient() {
 
         {botIssue ? (
           <p className={styles.warn}>
-            Your account is saved, but the bot couldn&rsquo;t give you the Discord role — usually
-            because that account isn&rsquo;t in the club server yet. Join the server and run{" "}
-            <code>/auth</code> again.
+            Your account is saved, but the Discord role was not granted: {botIssue}. If you
+            are not in the club server yet, join it and run <code>/auth</code> again. If you
+            already are, the bot service is down rather than your account, so tell a core
+            member rather than re-linking.
           </p>
         ) : null}
         <div className={styles.actions}>

@@ -215,20 +215,27 @@ async def verify_discord(
             bot_response_data = json.loads(bot_res_body)
 
     except urllib.error.HTTPError as e:
-        error_detail = e.read().decode("utf-8")
+        error_body = e.read().decode("utf-8", errors="replace")
         try:
-            parsed = json.loads(error_detail)
-            detail = parsed.get("detail", error_detail)
+            detail = str(json.loads(error_body).get("detail", "")).strip()
         except Exception:
-            detail = error_detail
+            # Not JSON. This is the host answering rather than the bot itself —
+            # a suspended or sleeping service returns an HTML error page. That
+            # page is meaningless to a member, so keep the status code and drop
+            # the body rather than rendering markup into the sign-in card.
+            detail = ""
 
-        print(f"[AuthRouter] Discord Bot returned {e.code}: {detail}")
+        print(f"[AuthRouter] Discord Bot returned {e.code}: {detail or error_body[:200]}")
         # Even if bot role assignment encounters a temporary issue, user is recorded in Firestore
-        bot_response_data = {"status": "bot_warning", "detail": str(detail)}
+        bot_response_data = {
+            "status": "bot_warning",
+            "status_code": e.code,
+            "detail": detail or f"the bot service answered HTTP {e.code}",
+        }
 
     except Exception as e:
         print(f"[AuthRouter] Could not connect to Discord Bot server at {bot_url}: {e}")
-        bot_response_data = {"status": "bot_unreachable", "detail": str(e)}
+        bot_response_data = {"status": "bot_unreachable", "detail": f"the bot service is not reachable ({e})"}
 
     # Fetch updated user state
     refreshed_doc = user_ref.get()
