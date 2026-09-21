@@ -8,7 +8,7 @@ import styles from "./details.module.css";
 
 export default function SPGDetailsPage() {
   const params = useParams();
-  const spgId = (params?.id as string) || "SPG-2024-089";
+  const spgId = typeof params?.id === "string" ? params.id : "";
   const { spgs } = useClub();
 
   const [activeTab, setActiveTab] = useState<"overview" | "reports" | "resources" | "team">("overview");
@@ -17,8 +17,22 @@ export default function SPGDetailsPage() {
   const [newMemberRole, setNewMemberRole] = useState("");
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
-  // Find project or fallback to default
-  const spg = spgs.find((s) => s.id.toLowerCase() === spgId.toLowerCase()) || spgs[0];
+  // A URL that names a group we do not have must not quietly render a
+  // different one. Declared after every hook so the hook order stays stable.
+  const spg = spgs.find((s) => s.id.toLowerCase() === spgId.toLowerCase());
+
+  if (!spg) {
+    return (
+      <div className={styles.notFound}>
+        <h1>No such project group</h1>
+        <p>
+          Nothing matches <code>{spgId || "that id"}</code>. It may have been
+          renamed, or you may not have access to it.
+        </p>
+        <Link href="/dashboard/spg">Back to all project groups</Link>
+      </div>
+    );
+  }
 
   const getTrackClass = (track: TrackType) => {
     switch (track) {

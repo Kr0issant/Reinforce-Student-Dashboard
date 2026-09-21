@@ -823,3 +823,32 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* Shown when the id in the URL does not name a project group we hold. */
+.notFound {
+  max-width: 34rem;
+  margin: 4rem auto;
+  padding: 2rem;
+  text-align: center;
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.notFound h1 {
+  margin: 0 0 0.75rem;
+  font-size: 1.4rem;
+  color: #FFFFFF;
+}
+
+.notFound code {
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #E5B731;
+}
+
+.notFound a {
+  display: inline-block;
+  margin-top: 1.25rem;
+  color: #E5B731;
+  text-decoration: underline;
+}
