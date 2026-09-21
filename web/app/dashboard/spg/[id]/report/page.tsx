@@ -9,24 +9,36 @@ import styles from "./report.module.css";
 export default function SPGReportPage() {
   const params = useParams();
   const router = useRouter();
-  const spgId = (params?.id as string) || "SPG-2024-089";
+  const spgId = typeof params?.id === "string" ? params.id : "";
   const { spgs, submitWeeklyReport } = useClub();
 
-  const spg = spgs.find((s) => s.id.toLowerCase() === spgId.toLowerCase()) || spgs[0];
+  const spg = spgs.find((s) => s.id.toLowerCase() === spgId.toLowerCase());
 
   // Form states
-  const [summary, setSummary] = useState(
-    "Finalized dataset cleaning and augmentation on Kaggle Hub. Began training baseline LSTM spatial models with 88% accuracy benchmark."
-  );
-  const [milestones, setMilestones] = useState<string[]>([
-    "Dataset preprocessing completed (Kaggle Hub)",
-    "Baseline LSTM model trained with 88% accuracy"
-  ]);
+  // Every field below renders its own placeholder. Seeding these with sample
+  // text meant a member could submit a report claiming work they never did,
+  // down to an accuracy figure and an attachment name, without typing anything.
+  const [summary, setSummary] = useState("");
+  const [milestones, setMilestones] = useState<string[]>([]);
   const [newMilestone, setNewMilestone] = useState("");
-  const [blockers, setBlockers] = useState("Insufficient GPU credits for full ensemble training on A100 cluster.");
-  const [nextSteps, setNextSteps] = useState("Implement Transformer-based spatial encoder and benchmark against baseline.");
-  const [files, setFiles] = useState<string[]>(["benchmark_accuracy_curves.png"]);
+  const [blockers, setBlockers] = useState("");
+  const [nextSteps, setNextSteps] = useState("");
+  const [files, setFiles] = useState<string[]>([]);
   const [submitted, setSubmitted] = useState(false);
+
+  // Declared after every hook so the hook order stays stable across renders.
+  if (!spg) {
+    return (
+      <div className={styles.notFound}>
+        <h1>No such project group</h1>
+        <p>
+          Nothing matches <code>{spgId || "that id"}</code>, so there is no report
+          to file against it.
+        </p>
+        <Link href="/dashboard/spg">Back to all project groups</Link>
+      </div>
+    );
+  }
 
   const handleAddMilestone = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && newMilestone.trim()) {
