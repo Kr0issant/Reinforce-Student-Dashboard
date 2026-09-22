@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, backend]
   pull_request:
-    branches: [main]
+    branches: [main, backend]
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -35,7 +35,7 @@ jobs:
         run: npm run build
 
   server:
-    name: Server — dependencies and syntax
+    name: Server — dependencies, syntax and tests
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -55,6 +55,12 @@ jobs:
       # indentation errors without needing a service account key in CI.
       - name: Compile check
         run: uv run python -m compileall -q app main.py
+
+      # The schema tests are plain unittest against pydantic models. No Firebase,
+      # no network, no dependency the app does not already have. Compiling alone
+      # does not notice a schema and the endpoint that uses it drifting apart.
+      - name: Schema tests
+        run: uv run python -m unittest discover -s tests -t .
 
   secrets:
     name: Secret scan
