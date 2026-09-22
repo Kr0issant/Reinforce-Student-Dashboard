@@ -1,7 +1,4 @@
-"""Blogs, Upvotes, and Comments API endpoints.
-
-Implements the specification in server/plan.md without denormalizing user data (using author_uid).
-"""
+"""Blogs, Upvotes, and Comments API endpoints."""
 
 from datetime import datetime, timezone
 import re

@@ -1,7 +1,4 @@
-"""Pydantic models and schemas for Blogs, Upvotes, and Comments.
-
-Adheres to server/plan.md and repository data contract conventions.
-"""
+"""Pydantic models and schemas for Blogs, Upvotes, and Comments."""
 
 from datetime import timezone
 from enum import Enum

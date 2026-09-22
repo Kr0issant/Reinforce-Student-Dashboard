@@ -1,52 +1,162 @@
-"""The stored shape of a `users/{doc_id}` document in Firestore.
+"""Pydantic schemas for unified Users & Students in Firestore."""
 
-This is what the database holds, not what the API returns — the response shape
-is `StudentProfile` in app/schemas/student.py. The authoritative description of
-this document is docs/DATA_CONTRACT.md. The YUVI bot reads these documents from
-another repository and will not fail to build when this drifts.
-
-One person can have two documents, with no transaction between them. This is a
-known defect and is deliberately not fixed here:
-
-- `users/{email}` — keyed by lowercased email and created on first sign-in.
-  `verified_at` is absent until Discord has been linked.
-- `users/{discord_id}` — a lookup copy for the bot, written only when Discord is
-  linked. It receives the linking payload and nothing else, so `created_at`,
-  `last_login`, `skills` and `social_links` are absent from it.
-
-A missing key and an explicit `null` are different things in Firestore: a
-query for `null` matches only documents that store the key. The defaults below
-are read-side conveniences for absent keys, not stored values.
-`model_fields_set` records which keys the document actually had, and only
-`model_dump(exclude_unset=True)` reproduces it. A plain `model_dump()` written
-back would add every absent key to the document.
-
-Timestamps stay the ISO-8601 strings the API writes. Parsed into `datetime`, a
-dump written back would store native Firestore timestamps instead, silently
-changing the stored type for every other reader.
-"""
-
+from enum import Enum
 from typing import List, Optional
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    EmailStr,
+    Field,
+    field_validator,
+)
 
-from pydantic import BaseModel, ConfigDict, Field
+from app.schemas.common import NonBlankStr
 
-from app.schemas.student import SocialLinks
+ALLOWED_EMAIL_DOMAINS = ("@sst.scaler.com", "@scaler.com")
+
+
+class MemberTier(str, Enum):
+    BEGINNER = "beginner"
+    ADVANCED = "advanced"
+
+
+class SocialLinks(BaseModel):
+    github: Optional[str] = None
+    kaggle: Optional[str] = None
+    linkedin: Optional[str] = None
+    discord: Optional[str] = None
+
+
+class TrackPoints(BaseModel):
+    total: int = Field(default=0, ge=0)
+    kaggle: int = Field(default=0, ge=0)
+    product: int = Field(default=0, ge=0)
+    research: int = Field(default=0, ge=0)
+    misc: int = Field(default=0, ge=0)
+
+
+class UserBase(BaseModel):
+    full_name: str = Field(..., min_length=1, max_length=100)
+    email: EmailStr
+    avatar_url: Optional[str] = None
+    bio: Optional[str] = Field(default=None, max_length=1000)
+    skills: List[str] = Field(default_factory=list, max_length=30)
+    social_links: SocialLinks = Field(default_factory=SocialLinks)
+
+    @field_validator("email")
+    @classmethod
+    def validate_scaler_domain(cls, v: str) -> str:
+        lowered = v.lower().strip()
+        if not any(lowered.endswith(domain) for domain in ALLOWED_EMAIL_DOMAINS):
+            raise ValueError("Email must end with @sst.scaler.com or @scaler.com")
+        return lowered
+
+
+class UserUpdateRequest(BaseModel):
+    """Payload when a user updates their own profile."""
+    model_config = ConfigDict(extra="forbid")
+
+    full_name: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    avatar_url: Optional[str] = None
+    bio: Optional[str] = Field(default=None, max_length=1000)
+    skills: Optional[List[str]] = Field(default=None, max_length=30)
+    social_links: Optional[SocialLinks] = None
+
+
+class AdminUserUpdateRequest(BaseModel):
+    """Payload for admins to update membership status, admin role, or club tier."""
+    model_config = ConfigDict(extra="forbid")
+
+    is_member: Optional[bool] = None
+    is_admin: Optional[bool] = None
+    tier: Optional[MemberTier] = None
+
+
+class DiscordVerifyRequest(BaseModel):
+    discord_id: str = Field(
+        ...,
+        description="Numeric Discord snowflake string (e.g. 1549547403819090011)",
+        pattern=r"^\d{17,20}$"
+    )
 
 
 class UserDocument(BaseModel):
-    # Keys outside the contract, such as a legacy `picture`, are dropped on
-    # parse rather than rejected, and so are never written back.
+    """The raw document shape stored in Firestore at `users/{uid}`."""
     model_config = ConfigDict(extra="ignore")
 
+    id: str
     email: str
     full_name: str
     avatar_url: Optional[str] = None
-    firebase_uid: Optional[str] = None
     discord_id: Optional[str] = None
+    is_admin: bool = False
+    is_member: bool = False
+    tier: MemberTier = MemberTier.BEGINNER
     is_verified: bool = False
     verified_at: Optional[str] = None
+    points: TrackPoints = Field(default_factory=TrackPoints)
+    bio: Optional[str] = None
+    skills: List[str] = Field(default_factory=list)
+    social_links: SocialLinks = Field(default_factory=SocialLinks)
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
     last_login: Optional[str] = None
+
+
+class UserPublicResponse(BaseModel):
+    """Publicly viewable member profile card / directory listing."""
+    id: str
+    full_name: str
+    avatar_url: Optional[str] = None
+    bio: Optional[str] = None
+    is_member: bool = False
+    tier: MemberTier = MemberTier.BEGINNER
+    is_verified: bool = False
     skills: List[str] = Field(default_factory=list)
     social_links: SocialLinks = Field(default_factory=SocialLinks)
+    points: TrackPoints = Field(default_factory=TrackPoints)
+
+
+class UserMeResponse(BaseModel):
+    """Full authenticated profile returned to the owner."""
+    id: str
+    email: str
+    full_name: str
+    avatar_url: Optional[str] = None
+    discord_id: Optional[str] = None
+    is_admin: bool = False
+    is_member: bool = False
+    tier: MemberTier = MemberTier.BEGINNER
+    is_verified: bool = False
+    verified_at: Optional[str] = None
+    points: TrackPoints = Field(default_factory=TrackPoints)
+    bio: Optional[str] = None
+    skills: List[str] = Field(default_factory=list)
+    social_links: SocialLinks = Field(default_factory=SocialLinks)
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    last_login: Optional[str] = None
+
+
+class LeaderboardEntry(BaseModel):
+    id: str
+    full_name: str
+    avatar_url: Optional[str] = None
+    is_member: bool = False
+    tier: MemberTier = MemberTier.BEGINNER
+    points: TrackPoints
+    rank: int = 1
+
+
+class LeaderboardResponse(BaseModel):
+    track: str
+    total: int
+    entries: List[LeaderboardEntry]
+
+
+class UserListResponse(BaseModel):
+    items: List[UserPublicResponse]
+    total: int
+    page: int = 1
+    page_size: int = 20
+    has_more: bool = False

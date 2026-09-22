@@ -4,7 +4,7 @@ from server.app.services.config import get_settings
 # Import firebase to ensure it initializes when the app starts
 import server.app.services.firebase 
 
-from app.api.v1.endpoints import auth, tickets, blogs  
+from app.api.v1.endpoints import auth, tickets, blogs, users, contributions  
 
 settings = get_settings()
 app = FastAPI()
@@ -47,6 +47,8 @@ app.add_middleware(
 )
 
 app.include_router(auth.router, prefix="/api/v1")
+app.include_router(users.router, prefix="/api/v1")
+app.include_router(contributions.router, prefix="/api/v1")
 app.include_router(tickets.router, prefix="/api/v1")
 app.include_router(blogs.router, prefix="/api/v1")
 
