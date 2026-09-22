@@ -1,8 +1,8 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.config import get_settings
+from server.app.services.config import get_settings
 # Import firebase to ensure it initializes when the app starts
-import app.firebase 
+import server.app.services.firebase 
 
 from app.api.v1.endpoints import auth  
 

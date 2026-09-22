@@ -68,7 +68,7 @@ class ContributionSourceType(str, Enum):
     PROJECT = "project"
     SPG = "spg"
     BLOG = "blog"
-    LIBRARY_ITEM = "library_item"
+    TROPHY = "trophy_item" # Changed Library to Trophy because Prez said so
 
 
 class ContributionStatus(str, Enum):

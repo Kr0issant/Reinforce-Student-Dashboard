@@ -6,8 +6,8 @@ from typing import Optional, Dict, Any, List
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.api.security import get_current_user
-from app.firebase import db
-from app.config import get_settings
+from server.app.services.firebase import db
+from server.app.services.config import get_settings
 from app.schemas.student import (
     StudentProfile, 
     ProfileUpdateRequest, 
