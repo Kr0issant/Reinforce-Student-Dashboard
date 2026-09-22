@@ -9,7 +9,7 @@
 ## 1. Purpose
 
 A contribution records one piece of credited activity — an event, a hackathon
-placement, SPG or project work, mentoring, teaching, a blog or library addition,
+placement, SPG or project work, mentoring, teaching, a blog or trophy item,
 club service — so points, the leaderboard and a Verified tag can be derived from
 it, audited and recalculated.
 
@@ -27,9 +27,23 @@ place — as PR #7's frontend mock does with `points + 10` — cannot be audited
 
 ## 3. Models
 
-`ContributionBase` holds the content. `ContributionCreate` is a trusted recorder's
-input (an admin or the bot); `ContributionRecord` adds server-owned lifecycle
-metadata. `ContributionSource` is the nested `{type, id}` reference.
+```
+ContributionDetails     category, title, description, points, source, event_id, occurred_at
+├─ AdminAwardStudent    + spg_id          POST /contributions/award/student/{student_id}
+├─ AdminAwardSPG                          POST /contributions/award/spg/{spg_id}
+└─ ContributionBase     + contributor_id, spg_id
+   ├─ ContributionCreate                  a trusted recorder's input, e.g. the bot
+   └─ ContributionRecord  + server-owned lifecycle metadata
+AdminRevokeRecord       status_reason     PATCH /contributions/{record_id}/revoke
+```
+
+The recipient comes from the path, never the body: `student_id` for a student
+award, `spg_id` for an SPG award — the server resolves the SPG's members and
+creates one record each, all carrying that `spg_id`. `occurred_at` is required:
+it is when the activity happened, not when the award was clicked. A direct award
+may be approved at once, but the server sets `status`, `reviewed_by` and
+`reviewed_at`; no request can choose them. Revocation takes only a reason; the
+revoker and time come from the authenticated caller.
 
 | Field | Owner | Rule |
 |---|---|---|
@@ -39,6 +53,7 @@ metadata. `ContributionSource` is the nested `{type, id}` reference.
 | `description` | recorder | Optional; 1–2000 characters; required when `category` is `other` |
 | `points` | recorder | Strict integer, ≥ 0 (§5) |
 | `source` | recorder | Optional `ContributionSource` (§4) |
+| `event_id`, `spg_id` | recorder | Optional, independent context (§4) |
 | `occurred_at` | recorder | When the activity happened |
 | `id` | server | Non-blank |
 | `schema_version` | server | Exactly the integer `1` |
@@ -64,32 +79,55 @@ metadata. `ContributionSource` is the nested `{type, id}` reference.
   Firestore's value encoder writes them as plain strings. When formatting one
   into text, use `.value`: `str()` and f-strings give `ContributionStatus.APPROVED`.
 
-## 4. Category vs Source
+## 4. Category, context and source
 
-Two independent axes. **Category** is what the contributor did; **source** is
-what it relates to. This avoids both an extra `action` field and nullable
-`event_id` / `project_id` / `spg_id` columns.
+Three independent things, each with exactly one representation:
 
-| Activity | `category` | `source` |
-|---|---|---|
-| Attended event X | `participation` | `{"type": "event", "id": "X"}` |
-| Organised event X | `organizing` | `{"type": "event", "id": "X"}` |
-| Placed at hackathon H | `achievement` | `{"type": "event", "id": "H"}` |
-| Ran workshop W | `teaching` | `{"type": "event", "id": "W"}` |
-| Delivered a project milestone | `project_work` | `{"type": "project", "id": "P"}` |
-| Mentored an SPG | `mentorship` | `{"type": "spg", "id": "S"}` |
-| Published a blog | `content` | `{"type": "blog", "id": "B"}` |
-| Added a library item | `content` | `{"type": "library_item", "id": "L"}` |
-| Wrote an external tutorial | `content` | `null` |
-| Club operations | `service` | `null` |
-| Anything else | `other` — description required | any |
+- **Category** — what the contributor did.
+- **Context** — `event_id` and `spg_id`: the event it happened at and the SPG it
+  was done as. Either, both or neither may be set.
+- **Source** — what it is about or produced: `project`, `blog` or `trophy_item`.
+  Events and SPGs are never sources, so "linked to event X" cannot be said twice.
 
-Source types are `event`, `project`, `spg`, `blog` and `library_item`; a `null`
-source means no internal entity. Blogs and library additions are `content`, not
-categories of their own. `blog` follows the existing `schemas/blogs.py`
-placeholder — PR #7's frontend says "article", but there is one canonical term.
+| Activity | `category` | Context | `source` |
+|---|---|---|---|
+| Attended event X | `participation` | `event_id=X` | `null` |
+| Organised event X | `organizing` | `event_id=X` | `null` |
+| Won hackathon H as SPG S, with project P | `achievement` | `event_id=H, spg_id=S` | `project:P` |
+| Ran workshop W | `teaching` | `event_id=W` | `null` |
+| Delivered a milestone of project P | `project_work` | `spg_id=S` | `project:P` |
+| Mentored SPG S | `mentorship` | `spg_id=S` | `null` |
+| Published blog B | `content` | — | `blog:B` |
+| Added trophy item T | `content` | — | `trophy_item:T` |
+| Club operations | `service` | — | `null` |
+| Anything else | `other` — description required | any | any |
+
+Context and sources are opaque IDs: `EventRecord` (`schemas/events.py`: `id`,
+`name`) and `SPGRecord` (`schemas/spgs.py`: `id`, `name`, `type`, `member_ids`,
+`lead_id`, `status`) are minimal placeholders, never embedded in a contribution.
 The schema does not check that a referenced entity exists; the endpoint does.
 Adding a category or source type is an enum change, coordinated with every reader.
+
+`trophy_item` replaced `library_item` in the backend on the club president's
+request. Whether it is a rename or a different concept is an **open product
+decision**; `library_item` is not kept as an alias. `blog` follows the existing
+`schemas/blogs.py`; PR #7's frontend says "article", but there is one term.
+
+### SPGs
+
+An SPG is Reinforce's common team abstraction. Different workflows use different
+types; a contribution references any of them only through `spg_id`.
+
+| `SPGType` | Team formed for |
+|---|---|
+| `learning` | Structured learning together |
+| `project` | Building a project or product |
+| `event` | An event hosted or managed by Reinforce |
+| `external_event` | An outside hackathon, competition or event |
+| `miscellaneous` | Anything legitimate that fits none of the above |
+
+The type is required and never free text. "High value" is importance, not a
+type, and has no field yet. `SPGStatus` values remain provisional.
 
 ## 5. Points
 
@@ -123,12 +161,12 @@ revoked records remain as audit history.
 `is_verified` is a read-only property, true exactly when `status` is `approved` —
 the same condition as `counts_toward_leaderboard`. It is never stored and cannot
 be supplied, so there is no boolean to drift from `status`. It drives the Verified
-tag on blogs, library additions or any other contribution.
+tag on blogs, trophy items or any other contribution.
 
 It means **"this contribution was reviewed and approved by Reinforce"** — not that
 Reinforce certifies the underlying content as factually correct. If a blog or
-library entity later gets its own editorial review, that entity owns that state;
-it is not duplicated here.
+trophy entity later gets its own editorial review, that entity owns that state;
+it is not duplicated here. Blogs have no review workflow yet.
 
 ```python
 ContributionRecord(contributor_id="user_123", category="content",
@@ -136,8 +174,8 @@ ContributionRecord(contributor_id="user_123", category="content",
                    source={"type": "blog", "id": "blog_456"},
                    status="approved", ...)        # is_verified, counts: True, True
 # The same record while pending                   # is_verified, counts: False, False
-# A library addition: category="content",
-#   source={"type": "library_item", "id": "resource_789"}, status="approved"
+# A trophy item: category="content",
+#   source={"type": "trophy_item", "id": "trophy_789"}, status="approved"
 ```
 
 ## 7. Deduplication
@@ -151,8 +189,9 @@ twice produces the same key. Illustrations only; the endpoint decides the format
 ```
 attendance:event123:user123
 blog:blog456:user123
-library:resource789:user123
+trophy_item:trophy789:user123
 project_work:project12:milestone7:user123
+spg_award:spg001:<award id>:user123
 ```
 
 Otherwise it is `null` and review catches duplicates. No uniqueness is derived
@@ -167,8 +206,10 @@ A contributor's points are the `SUM(points)` of their records whose read-only
 stored total or cache. Time windows (by `occurred_at`), per-track or per-category
 boards and tie-breaking are query decisions. PR #7's mock columns are all
 derivable — `articlesCount` from `content`, `eventWinsCount` from `achievement`
-on events, `spgCount` from distinct `spg` sources — though its `name` and `track`
-need `users`, and `tier` does not exist yet.
+with an `event_id`, `spgCount` from distinct `spg_id`s — though its `name` and
+`track` need `users`, and `tier` does not exist yet. An SPG award is never a
+total on the SPG: it is one record per member, each summed like any other.
+`StudentResponse.points` is this sum, computed on read — never a stored counter.
 
 ## 9. Immutability
 
@@ -184,7 +225,8 @@ For comparing Aryan's endpoint contract against this schema:
 
 - [ ] **Contributor identifier semantics** — `contributor_id`, opaque; which identity it holds is open (§11)
 - [ ] **Category enum values** — exactly the nine in §4
-- [ ] **Source representation** — nested `{type, id}`, not per-entity ID fields
+- [ ] **Source representation** — nested `{type, id}` for `project`, `blog`, `trophy_item` only
+- [ ] **Context representation** — `event_id` and `spg_id`, never an event or SPG source
 - [ ] **Title/description constraints** — §3, including `other` requiring a description
 - [ ] **Strict points behaviour** — §5
 - [ ] **Request-owned fields** — the recorder fields in §3, and nothing else
@@ -198,7 +240,20 @@ For comparing Aryan's endpoint contract against this schema:
 - [ ] **Authorization for recorder/reviewer** — who may record, review and revoke; needs RBAC
 - [ ] **Review/revoke transition behaviour** — enforced by the endpoint, per §6
 - [ ] **Verified-tag presentation derives from status** — never a stored or accepted `is_verified`
-- [ ] **Blog/library source naming matches endpoint contracts** — `blog` and `library_item`
+- [ ] **Blog/trophy source naming matches endpoint contracts** — `blog` and `trophy_item`
+
+Known mismatches in the endpoints as of `backend@c0c9680`, for Aryan to align:
+
+- The award endpoints do not pass `occurred_at`, so record validation fails; they
+  must take it from the request.
+- They read `deduplication_key` from the request; the server must generate it.
+- The SPG award finds members through `users.spg_ids`, a second copy of SPG
+  membership beside `SPGRecord.member_ids`; one must be the source.
+- The SPG award does not set `spg_id` on the records it creates.
+- `award.source` may no longer be an event or SPG; use `event_id` / `spg_id`.
+- Revoke writes a raw update instead of a validated `ContributionRecord`.
+- Records are stored with `model_dump(mode="json")` — timestamps as strings —
+  while Python-mode dumps keep native timestamps; persistence must pick one.
 
 ## 11. Open Decisions
 
@@ -213,3 +268,9 @@ For comparing Aryan's endpoint contract against this schema:
 8. HTTP error codes for business-rule failures.
 9. Whether a reviewer may adjust points while pending, or must reject and re-record.
 10. Maximum lengths for `status_reason` and `deduplication_key` — none set yet.
+11. `trophy_item` vs `library_item`: a rename, or two different concepts (§4).
+12. Whether `SPGRecord`'s provisional statuses stand, and whether SPGs later need a
+    separate tier or priority field.
+13. Event type, status and dates, once an event workflow exists.
+14. How an SPG completion request (report → review → award) is modelled. It is a
+    request for review, not a contribution; only the resulting award is.

@@ -12,6 +12,9 @@ from datetime import datetime, timedelta, timezone
 from pydantic import ValidationError
 
 from app.schemas.contributions import (
+    AdminAwardSPG,
+    AdminAwardStudent,
+    AdminRevokeRecord,
     ContributionCategory,
     ContributionCreate,
     ContributionRecord,
@@ -59,7 +62,19 @@ def content(**overrides):
         "category": "participation",
         "title": "Attended an introductory workshop",
         "points": 10,
-        "source": {"type": "event", "id": "event_123"},
+        "event_id": "event_123",
+        "occurred_at": OCCURRED_AT,
+    }
+    data.update(overrides)
+    return data
+
+
+def award(**overrides):
+    """A valid admin award body: contribution details only."""
+    data = {
+        "category": "achievement",
+        "title": "First place, internal hackathon",
+        "points": 50,
         "occurred_at": OCCURRED_AT,
     }
     data.update(overrides)
@@ -92,9 +107,12 @@ class EnumTests(unittest.TestCase):
         )
 
     def test_source_type_values(self):
+        # Events and SPGs are context (event_id, spg_id), never sources.
+        # trophy_item is the current backend value; trophy_item vs
+        # library_item is an open product naming decision.
         self.assertEqual(
             {s.value for s in ContributionSourceType},
-            {"event", "project", "spg", "blog", "library_item"},
+            {"project", "blog", "trophy_item"},
         )
 
     def test_status_values(self):
@@ -109,21 +127,26 @@ class StringTests(unittest.TestCase):
         created = ContributionCreate.model_validate(content(
             contributor_id="  contributor_001  ",
             title="  Attended  ",
-            source={"type": "event", "id": " event_123 "},
+            event_id=" event_123 ",
+            spg_id=" spg_001 ",
+            source={"type": "project", "id": " project_456 "},
         ))
         self.assertEqual(created.contributor_id, "contributor_001")
         self.assertEqual(created.title, "Attended")
-        self.assertEqual(created.source.id, "event_123")
+        self.assertEqual(created.event_id, "event_123")
+        self.assertEqual(created.spg_id, "spg_001")
+        self.assertEqual(created.source.id, "project_456")
 
     def test_blank_identifiers_are_rejected(self):
         for blank in ("", "   "):
-            with self.subTest(field="contributor_id", value=blank):
-                with self.assertRaises(ValidationError):
-                    ContributionCreate.model_validate(content(contributor_id=blank))
+            for field in ("contributor_id", "event_id", "spg_id"):
+                with self.subTest(field=field, value=blank):
+                    with self.assertRaises(ValidationError):
+                        ContributionCreate.model_validate(content(**{field: blank}))
             with self.subTest(field="source.id", value=blank):
                 with self.assertRaises(ValidationError):
                     ContributionCreate.model_validate(
-                        content(source={"type": "event", "id": blank})
+                        content(source={"type": "project", "id": blank})
                     )
 
     def test_title_must_be_1_to_200_characters(self):
@@ -166,7 +189,7 @@ class PointsTests(unittest.TestCase):
 
 class SourceTests(unittest.TestCase):
     def test_each_source_type_is_accepted(self):
-        for source_type in ("event", "project", "spg", "blog", "library_item"):
+        for source_type in ("project", "blog", "trophy_item"):
             with self.subTest(source_type=source_type):
                 created = ContributionCreate.model_validate(
                     content(source={"type": source_type, "id": f"{source_type}_123"})
@@ -179,16 +202,152 @@ class SourceTests(unittest.TestCase):
     def test_invalid_sources_are_rejected(self):
         invalid = {
             "unknown type": {"type": "competition", "id": "competition_123"},
+            # One representation per relationship: events and SPGs are
+            # event_id and spg_id, never a source.
+            "event as source": {"type": "event", "id": "event_123"},
+            "spg as source": {"type": "spg", "id": "spg_001"},
             # One canonical term per entity: blogs are "blog", never "article".
             "alias type": {"type": "article", "id": "blog_456"},
-            "unknown field": {"type": "event", "id": "event_123", "name": "Workshop"},
-            "missing id": {"type": "event"},
-            "missing type": {"id": "event_123"},
+            # Replaced by trophy_item in the backend; not kept as an alias.
+            "retired library_item": {"type": "library_item", "id": "resource_789"},
+            "unknown field": {"type": "project", "id": "project_456", "name": "Demo"},
+            "missing id": {"type": "project"},
+            "missing type": {"id": "project_456"},
         }
         for case, source in invalid.items():
             with self.subTest(case=case):
                 with self.assertRaises(ValidationError):
                     ContributionCreate.model_validate(content(source=source))
+
+
+class ContextTests(unittest.TestCase):
+    # event_id and spg_id are independent workflow context.
+
+    def test_spg_and_event_combinations_are_all_valid(self):
+        combinations = {
+            "neither": {},
+            "spg only": {"spg_id": "spg_001"},
+            "event only": {"event_id": "event_001"},
+            "both": {"spg_id": "spg_001", "event_id": "event_001"},
+        }
+        for case, context in combinations.items():
+            with self.subTest(case=case):
+                stored = ContributionRecord.model_validate(record("approved", **{"event_id": None, **context}))
+                self.assertEqual(stored.spg_id, context.get("spg_id"))
+                self.assertEqual(stored.event_id, context.get("event_id"))
+
+    def test_context_coexists_with_a_source(self):
+        # Won event X as SPG Y, with project P.
+        stored = ContributionRecord.model_validate(record(
+            "approved", category="achievement", spg_id="spg_001", event_id="event_001",
+            source={"type": "project", "id": "project_456"},
+        ))
+        self.assertEqual(
+            (stored.spg_id, stored.event_id, stored.source.id),
+            ("spg_001", "event_001", "project_456"),
+        )
+
+
+class AwardTests(unittest.TestCase):
+    def test_student_award_accepts_every_context_combination(self):
+        for context in ({}, {"spg_id": "spg_001"}, {"event_id": "event_001"},
+                        {"spg_id": "spg_001", "event_id": "event_001"}):
+            with self.subTest(context=context):
+                body = AdminAwardStudent.model_validate(award(**context))
+                self.assertEqual(body.spg_id, context.get("spg_id"))
+                self.assertEqual(body.event_id, context.get("event_id"))
+
+    def test_spg_award_accepts_an_optional_event(self):
+        self.assertIsNone(AdminAwardSPG.model_validate(award()).event_id)
+        self.assertEqual(AdminAwardSPG.model_validate(award(event_id="event_001")).event_id, "event_001")
+
+    def test_spg_award_takes_its_spg_from_the_path(self):
+        with self.assertRaises(ValidationError):
+            AdminAwardSPG.model_validate(award(spg_id="spg_001"))
+
+    def test_awards_reject_recipient_and_server_owned_fields(self):
+        forbidden = {"student_id": "student_001", "contributor_id": "student_001", **SERVER_OWNED}
+        for model in (AdminAwardStudent, AdminAwardSPG):
+            for field, value in forbidden.items():
+                with self.subTest(model=model.__name__, field=field):
+                    with self.assertRaises(ValidationError):
+                        model.model_validate(award(**{field: value}))
+
+    def test_occurred_at_is_required(self):
+        body = award()
+        del body["occurred_at"]
+        for model in (AdminAwardStudent, AdminAwardSPG):
+            with self.subTest(model=model.__name__):
+                with self.assertRaises(ValidationError):
+                    model.model_validate(body)
+
+    def test_award_details_keep_content_rules(self):
+        invalid = {
+            "negative points": {"points": -1},
+            "bool points": {"points": True},
+            "string points": {"points": "50"},
+            "blank title": {"title": "   "},
+            "blank event": {"event_id": " "},
+            "other without description": {"category": "other"},
+            "event as source": {"source": {"type": "event", "id": "event_001"}},
+        }
+        for case, overrides in invalid.items():
+            with self.subTest(case=case):
+                with self.assertRaises(ValidationError):
+                    AdminAwardStudent.model_validate(award(**overrides))
+
+    def test_award_plus_server_fields_forms_an_approved_record(self):
+        # Direct awards are approved at once, but the server still records who
+        # reviewed them and when; the request never chooses the status.
+        body = AdminAwardStudent.model_validate(award(spg_id="spg_001", event_id="event_001"))
+        stored = ContributionRecord(
+            **body.model_dump(),
+            contributor_id="student_001",
+            id="contribution_001",
+            status=ContributionStatus.APPROVED,
+            recorded_by="admin_001",
+            created_at=CREATED_AT,
+            reviewed_by="admin_001",
+            reviewed_at=CREATED_AT,
+        )
+        self.assertTrue(stored.counts_toward_leaderboard)
+        self.assertEqual((stored.spg_id, stored.event_id), ("spg_001", "event_001"))
+
+    def test_spg_award_yields_one_record_per_member(self):
+        body = AdminAwardSPG.model_validate(award(event_id="event_001"))
+        members = ("student_001", "student_002", "student_003")
+        stored = [
+            ContributionRecord(
+                **body.model_dump(), contributor_id=member, spg_id="spg_001",
+                id=f"contribution_{n}", status=ContributionStatus.APPROVED,
+                recorded_by="admin_001", created_at=CREATED_AT,
+                reviewed_by="admin_001", reviewed_at=CREATED_AT,
+            )
+            for n, member in enumerate(members)
+        ]
+        self.assertEqual([r.contributor_id for r in stored], list(members))
+        self.assertTrue(all(r.spg_id == "spg_001" and r.points == 50 for r in stored))
+
+
+class RevokeTests(unittest.TestCase):
+    def test_revoke_takes_only_a_reason(self):
+        self.assertEqual(
+            AdminRevokeRecord.model_validate({"status_reason": " Recorded twice "}).status_reason,
+            "Recorded twice",
+        )
+
+    def test_revoke_rejects_a_blank_or_missing_reason(self):
+        for body in ({}, {"status_reason": "   "}):
+            with self.subTest(body=body):
+                with self.assertRaises(ValidationError):
+                    AdminRevokeRecord.model_validate(body)
+
+    def test_revoke_rejects_server_owned_fields(self):
+        for field, value in {"record_id": "contribution_001", "status": "revoked",
+                             "revoked_by": "admin_001", "revoked_at": REVOKED_AT}.items():
+            with self.subTest(field=field):
+                with self.assertRaises(ValidationError):
+                    AdminRevokeRecord.model_validate({"status_reason": "Recorded twice", field: value})
 
 
 class OwnershipTests(unittest.TestCase):
@@ -339,8 +498,8 @@ class DerivedViewTests(unittest.TestCase):
                 self.assertEqual(stored.is_verified, status == "approved")
                 self.assertEqual(stored.counts_toward_leaderboard, status == "approved")
 
-    def test_blog_and_library_items_share_the_same_lifecycle(self):
-        for source_type in ("blog", "library_item"):
+    def test_blog_and_trophy_items_share_the_same_lifecycle(self):
+        for source_type in ("blog", "trophy_item"):
             source = {"type": source_type, "id": f"{source_type}_456"}
             for status in LIFECYCLE_BY_STATUS:
                 with self.subTest(source=source_type, status=status):
@@ -374,10 +533,14 @@ class SerializationTests(unittest.TestCase):
                 self.assertEqual(ContributionRecord.model_validate_json(stored.model_dump_json()), stored)
 
     def test_json_shape(self):
-        dumped = ContributionRecord.model_validate(record("approved")).model_dump(mode="json")
+        dumped = ContributionRecord.model_validate(record(
+            "approved", spg_id="spg_001", source={"type": "project", "id": "project_456"},
+        )).model_dump(mode="json")
         self.assertEqual(dumped["category"], "participation")
         self.assertEqual(dumped["status"], "approved")
-        self.assertEqual(dumped["source"], {"type": "event", "id": "event_123"})
+        self.assertEqual(dumped["event_id"], "event_123")
+        self.assertEqual(dumped["spg_id"], "spg_001")
+        self.assertEqual(dumped["source"], {"type": "project", "id": "project_456"})
         self.assertEqual(dumped["schema_version"], 1)
 
     def test_python_dump_keeps_native_datetimes(self):
@@ -385,12 +548,14 @@ class SerializationTests(unittest.TestCase):
         self.assertIsInstance(dumped["created_at"], datetime)
 
     def test_enum_backed_values_dump_as_strings(self):
-        stored = ContributionRecord.model_validate(record("approved"))
+        stored = ContributionRecord.model_validate(
+            record("approved", source={"type": "trophy_item", "id": "trophy_001"})
+        )
         python = stored.model_dump()
         values = {
             "category": (python["category"], "participation"),
             "status": (python["status"], "approved"),
-            "source.type": (python["source"]["type"], "event"),
+            "source.type": (python["source"]["type"], "trophy_item"),
         }
         for name, (value, expected) in values.items():
             with self.subTest(name=name):

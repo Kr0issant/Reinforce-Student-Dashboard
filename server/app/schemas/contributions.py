@@ -6,6 +6,10 @@ nothing here reads or writes Firestore. See docs/CONTRIBUTION_SCHEMA.md.
 A contribution is one piece of credited activity. Points are never kept as a
 running total; a leaderboard is the sum of `points` over APPROVED records,
 grouped by `contributor_id`, so it can always be recalculated from the records.
+
+Events and SPGs are workflow context, referenced by `event_id` and `spg_id`.
+`source` is only for the thing a contribution is about or produced, so each
+relationship has exactly one representation.
 """
 
 from datetime import timezone
@@ -20,17 +24,10 @@ from pydantic import (
     ConfigDict,
     Field,
     PlainSerializer,
-    StringConstraints,
     model_validator,
 )
 
-# Identifiers are opaque: nothing assumes an email, Firebase UID or Discord
-# snowflake, because which identity `contributor_id` holds is still undecided.
-NonBlankStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
-TitleStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
-DescriptionStr = Annotated[
-    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2000)
-]
+from app.schemas.common import DescriptionStr, NonBlankStr, TitleStr
 
 # Timezone required and normalised to UTC. JSON uses isoformat(), "+00:00",
 # matching the ISO strings the users collection already holds; Pydantic's
@@ -58,15 +55,16 @@ class ContributionCategory(str, Enum):
     TEACHING = "teaching"  # delivered a workshop, talk or tutorial
     MENTORSHIP = "mentorship"  # ongoing guidance of students or an SPG
     PROJECT_WORK = "project_work"  # contributed to an SPG or project
-    CONTENT = "content"  # wrote or added material: blogs, library items, papers
+    CONTENT = "content"  # wrote or added material such as blogs or papers
     SERVICE = "service"  # club operations and community help
     OTHER = "other"  # anything else; requires a description
 
 
 class ContributionSourceType(str, Enum):
-    EVENT = "event"
+    """What a contribution is about or produced. Never an event or SPG: those
+    are `event_id` and `spg_id`."""
+
     PROJECT = "project"
-    SPG = "spg"
     BLOG = "blog"
     TROPHY = "trophy_item" # Changed Library to Trophy because Prez said so
 
@@ -87,19 +85,23 @@ class ContributionSource(BaseModel):
     id: NonBlankStr
 
 
-class ContributionBase(BaseModel):
-    """What was contributed. Treated as immutable once recorded."""
+class ContributionDetails(BaseModel):
+    """What was contributed, as an admin or recorder describes it.
+
+    Shared by the award requests and the record itself. Who received it and
+    everything the server owns are deliberately absent.
+    """
 
     # Unknown fields are rejected, not dropped, in every contribution model:
     # this is a new contract, so drift should fail loudly.
     model_config = ConfigDict(extra="forbid")
 
-    contributor_id: NonBlankStr
     category: ContributionCategory
     title: TitleStr
     description: Optional[DescriptionStr] = None
     points: int = Field(strict=True, ge=0)
     source: Optional[ContributionSource] = None
+    event_id: Optional[NonBlankStr] = None
     occurred_at: UtcDatetime
 
     @model_validator(mode="after")
@@ -108,6 +110,40 @@ class ContributionBase(BaseModel):
         if self.category is ContributionCategory.OTHER and self.description is None:
             raise ValueError("description is required when category is 'other'")
         return self
+
+
+class AdminAwardStudent(ContributionDetails):
+    """Body of POST /contributions/award/student/{student_id}.
+
+    The student comes from the path. The server sets the status, reviewer,
+    timestamps and deduplication key.
+    """
+
+    spg_id: Optional[NonBlankStr] = None
+
+
+class AdminAwardSPG(ContributionDetails):
+    """Body of POST /contributions/award/spg/{spg_id}.
+
+    The SPG comes from the path; the server resolves its members and creates
+    one record per member, each carrying that `spg_id`.
+    """
+
+
+class AdminRevokeRecord(BaseModel):
+    """Body of PATCH /contributions/{record_id}/revoke. The server sets the
+    status, revoker and time."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    status_reason: NonBlankStr
+
+
+class ContributionBase(ContributionDetails):
+    """What was contributed and by whom. Treated as immutable once recorded."""
+
+    contributor_id: NonBlankStr
+    spg_id: Optional[NonBlankStr] = None
 
 
 class ContributionCreate(ContributionBase):
@@ -175,5 +211,5 @@ class ContributionRecord(ContributionBase):
     @property
     def is_verified(self) -> bool:
         """Reviewed and approved by the club — not a certification of the
-        underlying content, which a blog or library entity would own itself."""
+        underlying content, which a blog or other entity would own itself."""
         return self.status is ContributionStatus.APPROVED
