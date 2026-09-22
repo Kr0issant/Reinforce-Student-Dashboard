@@ -1,102 +1,237 @@
-from fastapi import APIRouter, Depends, HTTPException, status
-from google.cloud import firestore
-from app.api.security import get_current_user
-from app.api.v1.endpoints.student import get_admin_user
-from app.schemas.blogs import BlogCreate, BlogUpdate # Ensure these now use `content: str`
+"""Pydantic models and schemas for Blogs, Upvotes, and Comments.
 
-router = APIRouter(prefix="/blogs", tags=["Blogs"])
-db = firestore.client()
+Adheres to server/plan.md and repository data contract conventions.
+"""
 
-@router.post("/")
-async def create_blog_post(blog: BlogCreate, user: dict = Depends(get_current_user)):
-    """Saves the blog metadata and raw markdown content directly to Firestore."""
-    blog_data = blog.model_dump()
-    blog_data.update({
-        "author_id": user["uid"],
-        "created_at": firestore.SERVER_TIMESTAMP,
-        "is_verified": False,
-    })
-    
-    doc_ref = db.collection("blogs").document()
-    doc_ref.set(blog_data)
-    
-    return {"message": "Blog published successfully", "id": doc_ref.id}
+from datetime import timezone
+from enum import Enum
+import math
+import re
+from typing import Annotated, List, Optional
+from pydantic import (
+    AfterValidator,
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    PlainSerializer,
+    StringConstraints,
+    model_validator,
+)
 
-@router.get("/")
-async def list_blogs():
-    """Fetches all verified blogs for the public feed."""
-    # Note: This fetches the full markdown content for every blog. 
-    # If the feed gets slow in the future, you can use .select(["title", "summary", "tags"]) 
-    # to only fetch metadata for the list view.
-    docs = db.collection("blogs")\
-        .where("is_verified", "==", True)\
-        .order_by("created_at", direction=firestore.Query.DESCENDING)\
-        .stream()
-    
-    blogs = []
-    for doc in docs:
-        data = doc.to_dict()
-        data["id"] = doc.id
-        blogs.append(data)
-        
-    return blogs
+# ---------------------------------------------------------------------------
+# Common Type Constraints & Helpers
+# ---------------------------------------------------------------------------
 
-@router.get("/{blog_id}")
-async def get_blog(blog_id: str):
-    """Fetches a specific blog including its full markdown content."""
-    doc = db.collection("blogs").document(blog_id).get()
-    if not doc.exists:
-        raise HTTPException(status_code=404, detail="Blog not found")
-        
-    data = doc.to_dict()
-    data["id"] = doc.id
-    return data
+NonBlankStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+BlogTitleStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=3, max_length=200)]
+BlogSummaryStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=10, max_length=500)]
+CommentContentStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=4000)]
+SlugStr = Annotated[str, StringConstraints(strip_whitespace=True, to_lower=True, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")]
 
-@router.patch("/{blog_id}")
-async def update_blog(blog_id: str, updates: BlogUpdate, user: dict = Depends(get_current_user)):
-    """Allows the original author to update their blog and resets verification."""
-    doc_ref = db.collection("blogs").document(blog_id)
-    doc = doc_ref.get()
-    
-    if not doc.exists:
-        raise HTTPException(status_code=404, detail="Blog not found")
-        
-    if doc.to_dict().get("author_id") != user["uid"]:
-        raise HTTPException(status_code=403, detail="You can only edit your own blogs")
+UtcDatetime = Annotated[
+    AwareDatetime,
+    AfterValidator(lambda value: value.astimezone(timezone.utc)),
+    PlainSerializer(lambda value: value.isoformat(), return_type=str, when_used="json"),
+]
 
-    update_data = updates.model_dump(exclude_unset=True)
-    if not update_data:
-        raise HTTPException(status_code=400, detail="No fields provided to update")
 
-    # Security: If they change the content, force an admin to re-verify it
-    update_data["is_verified"] = False 
+def calculate_reading_time(content: str, words_per_minute: int = 200) -> int:
+    """Estimate reading time in minutes based on markdown word count."""
+    words = len(re.findall(r"\w+", content))
+    return max(1, math.ceil(words / words_per_minute))
 
-    doc_ref.update(update_data)
-    return {"message": "Blog updated and sent back for review."}
 
-@router.patch("/{blog_id}/verify")
-async def verify_blog_post(blog_id: str, admin: dict = Depends(get_admin_user)):
-    """Admins approve the blog, making it visible on the public feed."""
-    doc_ref = db.collection("blogs").document(blog_id)
-    if not doc_ref.get().exists:
-        raise HTTPException(status_code=404, detail="Blog not found")
-        
-    doc_ref.update({"is_verified": True})
-    return {"message": "Blog verified and published."}
+# ---------------------------------------------------------------------------
+# Enums
+# ---------------------------------------------------------------------------
 
-@router.delete("/{blog_id}")
-async def delete_blog(blog_id: str, user: dict = Depends(get_current_user)):
-    """Deletes a blog post from the database."""
-    doc_ref = db.collection("blogs").document(blog_id)
-    doc = doc_ref.get()
-    
-    if not doc.exists:
-        raise HTTPException(status_code=404, detail="Blog not found")
-        
-    # Allow the author to delete their own post
-    # (Optional: You can add an `or user.get("is_admin")` here if you want admins to have delete power)
-    if doc.to_dict().get("author_id") != user["uid"]:
-        raise HTTPException(status_code=403, detail="You can only delete your own blogs")
-        
-    doc_ref.delete()
-    return {"message": "Blog deleted successfully."}
+class BlogStatus(str, Enum):
+    DRAFT = "draft"
+    PUBLISHED = "published"
+    ARCHIVED = "archived"
+    UNLISTED = "unlisted"
+
+
+# ---------------------------------------------------------------------------
+# 1. Blog Post Schemas
+# ---------------------------------------------------------------------------
+
+class BlogStats(BaseModel):
+    upvote_count: int = Field(default=0, ge=0)
+    comment_count: int = Field(default=0, ge=0)
+    view_count: int = Field(default=0, ge=0)
+
+
+class BlogBase(BaseModel):
+    title: BlogTitleStr
+    summary: BlogSummaryStr
+    cover_image_url: Optional[str] = None
+    tags: List[str] = Field(default_factory=list, max_length=10)
+    status: BlogStatus = BlogStatus.DRAFT
+
+
+class BlogCreate(BlogBase):
+    """Payload when creating a new blog post."""
+    model_config = ConfigDict(extra="forbid")
+
+    slug: Optional[SlugStr] = None  # Auto-derived from title if omitted
+    content: NonBlankStr            # Full Markdown content
+
+
+class BlogUpdate(BaseModel):
+    """Payload for updating an existing blog post."""
+    model_config = ConfigDict(extra="forbid")
+
+    title: Optional[BlogTitleStr] = None
+    slug: Optional[SlugStr] = None
+    summary: Optional[BlogSummaryStr] = None
+    cover_image_url: Optional[str] = None
+    content: Optional[NonBlankStr] = None
+    tags: Optional[List[str]] = Field(default=None, max_length=10)
+    status: Optional[BlogStatus] = None
+
+
+class BlogDocument(BaseModel):
+    """The raw document shape stored in Firestore at `blogs/{blog_id}`."""
+    model_config = ConfigDict(extra="ignore")
+
+    id: str
+    slug: str
+    title: str
+    summary: str
+    content: str
+    cover_image_url: Optional[str] = None
+    author_uid: str
+    tags: List[str] = Field(default_factory=list)
+    reading_time_minutes: int = 1
+    status: BlogStatus = BlogStatus.DRAFT
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    published_at: Optional[str] = None
+    stats: BlogStats = Field(default_factory=BlogStats)
+
+
+class BlogSummary(BaseModel):
+    """Public feed card representation (omits markdown content to save bandwidth)."""
+    id: str
+    slug: str
+    title: str
+    summary: str
+    cover_image_url: Optional[str] = None
+    author_uid: str
+    tags: List[str] = Field(default_factory=list)
+    reading_time_minutes: int
+    status: BlogStatus
+    created_at: Optional[str] = None
+    published_at: Optional[str] = None
+    stats: BlogStats
+    is_upvoted: Optional[bool] = None  # Contextual to requesting authenticated user
+
+
+class BlogDetail(BlogSummary):
+    """Full blog detail view including Markdown content."""
+    content: str
+    updated_at: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# 2. Upvote Schemas
+# ---------------------------------------------------------------------------
+
+class BlogUpvoteDocument(BaseModel):
+    """Stored in `blogs/{blog_id}/upvotes/{user_uid}`."""
+    model_config = ConfigDict(extra="ignore")
+
+    user_uid: str
+    created_at: Optional[str] = None
+
+
+class UpvoteToggleResponse(BaseModel):
+    """Response returned when toggling an upvote."""
+    upvoted: bool
+    upvote_count: int
+
+
+# ---------------------------------------------------------------------------
+# 3. Comment Schemas (1-Layer Threading)
+# ---------------------------------------------------------------------------
+
+class CommentCreate(BaseModel):
+    """Payload to post a top-level comment or a 1-level reply."""
+    model_config = ConfigDict(extra="forbid")
+
+    content: CommentContentStr
+    parent_id: Optional[str] = Field(
+        default=None,
+        description="null for root comments, or the ID of the root comment for replies."
+    )
+    reply_to_user: Optional[str] = Field(
+        default=None,
+        description="Username/handle mention if replying within a thread (e.g. '@Jane')."
+    )
+
+
+class CommentUpdate(BaseModel):
+    """Payload to edit comment content."""
+    model_config = ConfigDict(extra="forbid")
+
+    content: CommentContentStr
+
+
+class CommentDocument(BaseModel):
+    """Stored in `blogs/{blog_id}/comments/{comment_id}`."""
+    model_config = ConfigDict(extra="ignore")
+
+    id: str
+    blog_id: str
+    parent_id: Optional[str] = None
+    reply_to_user: Optional[str] = None
+    content: str
+    author_uid: str
+    reply_count: int = 0
+    is_edited: bool = False
+    is_deleted: bool = False
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class CommentResponse(BaseModel):
+    """Public comment representation with masked content on soft delete."""
+    id: str
+    blog_id: str
+    parent_id: Optional[str] = None
+    reply_to_user: Optional[str] = None
+    content: str
+    author_uid: Optional[str] = None
+    reply_count: int = 0
+    is_edited: bool = False
+    is_deleted: bool = False
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    replies: List["CommentResponse"] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _mask_deleted_content(self):
+        if self.is_deleted:
+            self.content = "[This comment was deleted]"
+            self.author_uid = None
+        return self
+
+
+# ---------------------------------------------------------------------------
+# 4. List / Pagination Responses
+# ---------------------------------------------------------------------------
+
+class BlogListResponse(BaseModel):
+    items: List[BlogSummary]
+    total: int
+    page: int = 1
+    page_size: int = 10
+    has_more: bool = False
+
+
+class CommentTreeResponse(BaseModel):
+    blog_id: str
+    total_comments: int
+    comments: List[CommentResponse]
