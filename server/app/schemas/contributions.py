@@ -40,6 +40,8 @@ class ContributionTrack(str, Enum):
 
 
 class ContributionCategory(str, Enum):
+    # Frozen pending a team decision: `participation` existed before and is not
+    # in this list. Do not add or remove a value without that decision.
     ACHIEVEMENT = "achievement"
     PROJECT_WORK = "project_work"
     TEACHING = "teaching"
@@ -82,7 +84,6 @@ class ContributionDetails(BaseModel):
     points: int = Field(strict=True, ge=0)
     source: Optional[ContributionSource] = None
     event_id: Optional[NonBlankStr] = None
-    spg_id: Optional[NonBlankStr] = None
     occurred_at: UtcDatetime
 
     @model_validator(mode="after")
@@ -93,12 +94,22 @@ class ContributionDetails(BaseModel):
 
 
 class AdminAwardUser(ContributionDetails):
-    """Payload for POST /contributions/award/user/{user_id}."""
-    deduplication_key: Optional[NonBlankStr] = None
+    """Payload for POST /contributions/award/user/{user_id}.
+
+    The recipient comes from the path. Every server-owned field — including
+    `deduplication_key`, which the server derives — is rejected, not ignored.
+    An optional `spg_id` records the SPG the work was done as.
+    """
+
+    spg_id: Optional[NonBlankStr] = None
 
 
 class AdminAwardSPG(ContributionDetails):
-    """Payload for POST /contributions/award/spg/{spg_id}."""
+    """Payload for POST /contributions/award/spg/{spg_id}.
+
+    The SPG comes from the path; the server resolves its members and writes one
+    record each, so `spg_id` in the body is rejected too.
+    """
 
 
 class AdminRevokeRecord(BaseModel):
@@ -109,7 +120,9 @@ class AdminRevokeRecord(BaseModel):
 
 
 class ContributionBase(ContributionDetails):
+    # The Firebase UID of the member credited with the contribution.
     user_id: NonBlankStr
+    spg_id: Optional[NonBlankStr] = None
 
 
 class ContributionCreate(ContributionBase):
@@ -126,12 +139,15 @@ _REQUIRED_LIFECYCLE_FIELDS = {
 
 
 class ContributionRecord(ContributionBase):
-    """A recorded contribution with its server-owned lifecycle metadata."""
-    model_config = ConfigDict(extra="ignore")
+    """A recorded contribution with its server-owned lifecycle metadata.
+
+    `status` is explicit: a record is never approved by default. Unknown fields
+    are rejected rather than dropped, so drift fails loudly.
+    """
 
     id: NonBlankStr
     schema_version: Annotated[Literal[1], BeforeValidator(_exact_int)] = 1
-    status: ContributionStatus = ContributionStatus.APPROVED
+    status: ContributionStatus
     recorded_by: NonBlankStr
     created_at: UtcDatetime
     reviewed_by: Optional[NonBlankStr] = None
@@ -154,15 +170,51 @@ class ContributionRecord(ContributionBase):
             raise ValueError("revoked_at cannot be earlier than reviewed_at")
         return self
 
+    # Derived from `status` and never stored, so neither can drift from it.
+
     @property
     def counts_toward_leaderboard(self) -> bool:
         return self.status is ContributionStatus.APPROVED
 
+    @property
+    def is_verified(self) -> bool:
+        """Reviewed and approved by the club — not a judgement on the content
+        itself, which a blog or other entity would own."""
+        return self.status is ContributionStatus.APPROVED
 
-class ContributionListResponse(BaseModel):
-    items: List[ContributionRecord]
-    total: int
+
+class ContributionPage(BaseModel):
+    """A bounded page of contributions. `next_cursor` is null on the last page."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    items: List[ContributionRecord] = Field(default_factory=list)
+    next_cursor: Optional[NonBlankStr] = None
 
 
-# Backwards compatibility aliases
+class SPGAwardResponse(BaseModel):
+    """Result of awarding every member of one SPG."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    spg_id: NonBlankStr
+    points_per_member: int = Field(strict=True, ge=0)
+    awarded_count: int = Field(strict=True, ge=0)
+    user_ids: List[NonBlankStr] = Field(default_factory=list)
+    contribution_ids: List[NonBlankStr] = Field(default_factory=list)
+
+
+class LeaderboardEntry(BaseModel):
+    """One row of the contribution leaderboard, summed from approved records."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    user_id: NonBlankStr
+    points: int = Field(strict=True, ge=0)
+    contribution_count: int = Field(strict=True, ge=0)
+
+
+# Backwards compatibility aliases. `ContributionListResponse` was a second page
+# model for the same resource; `ContributionPage` is the one the API returns.
 AdminAwardStudent = AdminAwardUser
+ContributionListResponse = ContributionPage

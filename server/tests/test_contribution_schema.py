@@ -5,6 +5,8 @@ Run from server/:  python -m unittest discover -s tests
 No Firebase, no network. Every identifier is synthetic.
 """
 
+import os
+import subprocess
 import sys
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -13,7 +15,7 @@ from pydantic import ValidationError
 
 from app.schemas.contributions import (
     AdminAwardSPG,
-    AdminAwardStudent,
+    AdminAwardUser,
     AdminRevokeRecord,
     ContributionCategory,
     ContributionCreate,
@@ -21,6 +23,9 @@ from app.schemas.contributions import (
     ContributionSourceType,
     ContributionStatus,
 )
+
+# server/, so the subprocess import probe below resolves `app.` the same way.
+SERVER_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 OCCURRED_AT = datetime(2026, 9, 1, 10, 0, tzinfo=timezone.utc)
 CREATED_AT = datetime(2026, 9, 2, 10, 0, tzinfo=timezone.utc)
@@ -51,15 +56,15 @@ SERVER_OWNED = {
     "revoked_by": "reviewer_002",
     "revoked_at": REVOKED_AT,
     "status_reason": "Recorded twice",
-    "deduplication_key": "attendance:event_123:contributor_001",
+    "deduplication_key": "attendance:event_123:uid_001",
 }
 
 
 def content(**overrides):
     """A valid contribution payload: what a recorder may submit."""
     data = {
-        "contributor_id": "contributor_001",
-        "category": "participation",
+        "user_id": "uid_001",
+        "category": "organizing",
         "title": "Attended an introductory workshop",
         "points": 10,
         "event_id": "event_123",
@@ -100,11 +105,24 @@ class EnumTests(unittest.TestCase):
     # Changing one is a coordinated change, never a refactor.
 
     def test_category_values(self):
+        # The current, frozen set. Adding or removing a value is a coordinated
+        # product decision, not a refactor.
         self.assertEqual(
             {c.value for c in ContributionCategory},
-            {"participation", "achievement", "organizing", "teaching", "mentorship",
-             "project_work", "content", "service", "other"},
+            {"achievement", "project_work", "teaching", "mentorship",
+             "content", "organizing", "service", "other"},
         )
+
+    @unittest.skip(
+        "UNRESOLVED: an earlier revision of this contract included "
+        "'participation'. The category set on backend does not. Whether "
+        "attendance-only credit is a category, a zero-point award or not "
+        "recorded at all is a product decision, not a schema one, so the "
+        "enum is left exactly as backend defines it and this assertion is "
+        "parked rather than answered here."
+    )
+    def test_participation_is_a_category(self):
+        self.assertIn("participation", {c.value for c in ContributionCategory})
 
     def test_source_type_values(self):
         # Events and SPGs are context (event_id, spg_id), never sources.
@@ -125,13 +143,13 @@ class EnumTests(unittest.TestCase):
 class StringTests(unittest.TestCase):
     def test_whitespace_is_stripped(self):
         created = ContributionCreate.model_validate(content(
-            contributor_id="  contributor_001  ",
+            user_id="  uid_001  ",
             title="  Attended  ",
             event_id=" event_123 ",
             spg_id=" spg_001 ",
             source={"type": "project", "id": " project_456 "},
         ))
-        self.assertEqual(created.contributor_id, "contributor_001")
+        self.assertEqual(created.user_id, "uid_001")
         self.assertEqual(created.title, "Attended")
         self.assertEqual(created.event_id, "event_123")
         self.assertEqual(created.spg_id, "spg_001")
@@ -139,7 +157,7 @@ class StringTests(unittest.TestCase):
 
     def test_blank_identifiers_are_rejected(self):
         for blank in ("", "   "):
-            for field in ("contributor_id", "event_id", "spg_id"):
+            for field in ("user_id", "event_id", "spg_id"):
                 with self.subTest(field=field, value=blank):
                     with self.assertRaises(ValidationError):
                         ContributionCreate.model_validate(content(**{field: blank}))
@@ -249,11 +267,11 @@ class ContextTests(unittest.TestCase):
 
 
 class AwardTests(unittest.TestCase):
-    def test_student_award_accepts_every_context_combination(self):
+    def test_user_award_accepts_every_context_combination(self):
         for context in ({}, {"spg_id": "spg_001"}, {"event_id": "event_001"},
                         {"spg_id": "spg_001", "event_id": "event_001"}):
             with self.subTest(context=context):
-                body = AdminAwardStudent.model_validate(award(**context))
+                body = AdminAwardUser.model_validate(award(**context))
                 self.assertEqual(body.spg_id, context.get("spg_id"))
                 self.assertEqual(body.event_id, context.get("event_id"))
 
@@ -266,8 +284,10 @@ class AwardTests(unittest.TestCase):
             AdminAwardSPG.model_validate(award(spg_id="spg_001"))
 
     def test_awards_reject_recipient_and_server_owned_fields(self):
-        forbidden = {"student_id": "student_001", "contributor_id": "student_001", **SERVER_OWNED}
-        for model in (AdminAwardStudent, AdminAwardSPG):
+        # `student_id` is the retired identity field: still named here so it
+        # cannot quietly come back as an accepted alias for the recipient.
+        forbidden = {"student_id": "uid_001", "user_id": "uid_001", **SERVER_OWNED}
+        for model in (AdminAwardUser, AdminAwardSPG):
             for field, value in forbidden.items():
                 with self.subTest(model=model.__name__, field=field):
                     with self.assertRaises(ValidationError):
@@ -276,7 +296,7 @@ class AwardTests(unittest.TestCase):
     def test_occurred_at_is_required(self):
         body = award()
         del body["occurred_at"]
-        for model in (AdminAwardStudent, AdminAwardSPG):
+        for model in (AdminAwardUser, AdminAwardSPG):
             with self.subTest(model=model.__name__):
                 with self.assertRaises(ValidationError):
                     model.model_validate(body)
@@ -294,15 +314,15 @@ class AwardTests(unittest.TestCase):
         for case, overrides in invalid.items():
             with self.subTest(case=case):
                 with self.assertRaises(ValidationError):
-                    AdminAwardStudent.model_validate(award(**overrides))
+                    AdminAwardUser.model_validate(award(**overrides))
 
     def test_award_plus_server_fields_forms_an_approved_record(self):
         # Direct awards are approved at once, but the server still records who
         # reviewed them and when; the request never chooses the status.
-        body = AdminAwardStudent.model_validate(award(spg_id="spg_001", event_id="event_001"))
+        body = AdminAwardUser.model_validate(award(spg_id="spg_001", event_id="event_001"))
         stored = ContributionRecord(
             **body.model_dump(),
-            contributor_id="student_001",
+            user_id="uid_001",
             id="contribution_001",
             status=ContributionStatus.APPROVED,
             recorded_by="admin_001",
@@ -315,17 +335,17 @@ class AwardTests(unittest.TestCase):
 
     def test_spg_award_yields_one_record_per_member(self):
         body = AdminAwardSPG.model_validate(award(event_id="event_001"))
-        members = ("student_001", "student_002", "student_003")
+        members = ("uid_001", "uid_002", "uid_003")
         stored = [
             ContributionRecord(
-                **body.model_dump(), contributor_id=member, spg_id="spg_001",
+                **body.model_dump(), user_id=member, spg_id="spg_001",
                 id=f"contribution_{n}", status=ContributionStatus.APPROVED,
                 recorded_by="admin_001", created_at=CREATED_AT,
                 reviewed_by="admin_001", reviewed_at=CREATED_AT,
             )
             for n, member in enumerate(members)
         ]
-        self.assertEqual([r.contributor_id for r in stored], list(members))
+        self.assertEqual([r.user_id for r in stored], list(members))
         self.assertTrue(all(r.spg_id == "spg_001" and r.points == 50 for r in stored))
 
 
@@ -366,7 +386,7 @@ class OwnershipTests(unittest.TestCase):
             recorded_by="recorder_001",
             created_at=CREATED_AT,
         )
-        self.assertEqual(stored.contributor_id, created.contributor_id)
+        self.assertEqual(stored.user_id, created.user_id)
         self.assertEqual(stored.status, ContributionStatus.PENDING)
 
 
@@ -466,7 +486,7 @@ class DeduplicationTests(unittest.TestCase):
         self.assertIsNone(ContributionRecord.model_validate(record()).deduplication_key)
 
     def test_deterministic_key_is_kept_verbatim(self):
-        key = "attendance:event_123:contributor_001"
+        key = "attendance:event_123:uid_001"
         stored = ContributionRecord.model_validate(record(deduplication_key=key))
         self.assertEqual(stored.deduplication_key, key)
         with self.assertRaises(ValidationError):
@@ -478,11 +498,11 @@ class DeduplicationTests(unittest.TestCase):
         project = {"type": "project", "id": "project_456"}
         september = ContributionRecord.model_validate(record(
             id="contribution_001", category="project_work", source=project,
-            deduplication_key="project_work:project_456:milestone_1:contributor_001",
+            deduplication_key="project_work:project_456:milestone_1:uid_001",
         ))
         october = ContributionRecord.model_validate(record(
             id="contribution_002", category="project_work", source=project,
-            deduplication_key="project_work:project_456:milestone_2:contributor_001",
+            deduplication_key="project_work:project_456:milestone_2:uid_001",
         ))
         self.assertNotEqual(september.deduplication_key, october.deduplication_key)
 
@@ -536,7 +556,7 @@ class SerializationTests(unittest.TestCase):
         dumped = ContributionRecord.model_validate(record(
             "approved", spg_id="spg_001", source={"type": "project", "id": "project_456"},
         )).model_dump(mode="json")
-        self.assertEqual(dumped["category"], "participation")
+        self.assertEqual(dumped["category"], "organizing")
         self.assertEqual(dumped["status"], "approved")
         self.assertEqual(dumped["event_id"], "event_123")
         self.assertEqual(dumped["spg_id"], "spg_001")
@@ -553,7 +573,7 @@ class SerializationTests(unittest.TestCase):
         )
         python = stored.model_dump()
         values = {
-            "category": (python["category"], "participation"),
+            "category": (python["category"], "organizing"),
             "status": (python["status"], "approved"),
             "source.type": (python["source"]["type"], "trophy_item"),
         }
@@ -569,8 +589,25 @@ class SerializationTests(unittest.TestCase):
             ContributionRecord.model_validate(record(legacy_points=50))
 
     def test_schema_does_not_initialise_firebase(self):
-        self.assertNotIn("app.firebase", sys.modules)
-        self.assertNotIn("firebase_admin", sys.modules)
+        """Importing the schemas must not drag in Firebase.
+
+        Run in a subprocess: in this one, any other test module that imports a
+        router has already put firebase_admin in sys.modules, so an in-process
+        assertion would pass or fail on test order rather than on the import
+        graph being checked.
+        """
+        probe = (
+            "import sys; import app.schemas.contributions; "
+            "assert 'firebase_admin' not in sys.modules, 'firebase_admin was imported'; "
+            "assert 'app.services.firebase' not in sys.modules, 'app.services.firebase was imported'"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", probe],
+            cwd=SERVER_ROOT,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
 
 
 if __name__ == "__main__":

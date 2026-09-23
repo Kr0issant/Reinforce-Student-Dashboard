@@ -1,8 +1,8 @@
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from firebase_admin import auth
-import server.app.services.firebase
-from server.app.services.firebase import db
+
+from app.services.firebase import ensure_app
 
 security = HTTPBearer()
 
@@ -12,6 +12,9 @@ ALLOWED_DOMAINS = ("@sst.scaler.com", "@scaler.com")
 def get_current_user(
     cred: HTTPAuthorizationCredentials = Depends(security)
 ) -> dict:
+    # Firebase must be initialised before a token can be verified.
+    ensure_app()
+
     if not cred:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -39,16 +42,26 @@ def get_current_user(
         )
 
 
-def get_admin_user(user: dict = Depends(get_current_user)) -> dict:
-    """Verifies that the authenticated user has core admin privileges."""
-    uid = user.get("uid")
-    if not uid:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="UID missing from token.")
+def require_admin(user: dict = Depends(get_current_user)) -> dict:
+    """Admin access, from the Firebase custom claim `admin`.
 
-    doc = db.collection("users").document(uid).get()
-    if not doc.exists or not doc.to_dict().get("is_admin", False):
+    The one authorization rule in the API. It fails closed: only the exact
+    boolean True passes, so a missing claim, a false one or a truthy string is
+    rejected. Nothing is read from Firestore, so `UserDocument.is_admin` can
+    exist for display without ever granting API privileges. Provisioning the
+    claim on an account is an environment setup step.
+    """
+    if user.get("admin") is not True:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin privileges required."
+            detail="Administrator privileges are required.",
         )
     return user
+
+
+def get_admin_user(user: dict = Depends(get_current_user)) -> dict:
+    """Compatibility wrapper for modules that already import this name.
+
+    Delegates to `require_admin`, so there is only one authorization rule.
+    """
+    return require_admin(user)
