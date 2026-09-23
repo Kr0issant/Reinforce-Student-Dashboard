@@ -171,11 +171,17 @@ class SPGRegistrationRequest(SPGBase):
 class SPGCreate(SPGRegistrationRequest):
     """What the approval path hands to `create_spg`.
 
-    Only reached after a reviewer approves a registration; `source_ticket_id`
-    is what makes approving the same ticket twice idempotent.
+    Only reached after a reviewer approves a registration, so
+    `source_ticket_id` is required: it names the ticket that authorised this
+    group, and it is what makes approving the same ticket twice land on the
+    same document instead of creating a second group. Creation without one has
+    no approval behind it and no idempotency, so it is not allowed.
+
+    `SPGRecord` keeps the field optional, because documents written before this
+    workflow existed have no ticket and must still read back.
     """
 
-    source_ticket_id: Optional[NonBlankStr] = None
+    source_ticket_id: NonBlankStr
     proposition_document_url: Optional[NonBlankStr] = None
 
     @model_validator(mode="after")

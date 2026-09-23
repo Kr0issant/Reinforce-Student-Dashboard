@@ -13,7 +13,6 @@ by an admin through the contribution workflow, separately and afterwards.
 """
 
 import hashlib
-import uuid
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -239,11 +238,9 @@ def create_spg(
     if not canonical_user_exists(db, create.lead_id):
         raise SPGError(400, "The lead must be an existing member UID.")
 
-    record_id = (
-        spg_id_for_ticket(create.source_ticket_id)
-        if create.source_ticket_id
-        else f"spg_{uuid.uuid4().hex[:24]}"
-    )
+    # Always derived from the approving ticket: SPGCreate requires one, so a
+    # retried approval lands on this same document rather than a new group.
+    record_id = spg_id_for_ticket(create.source_ticket_id)
     record = SPGRecord(
         id=record_id,
         name=create.name,
