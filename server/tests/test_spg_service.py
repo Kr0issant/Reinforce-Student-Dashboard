@@ -389,5 +389,53 @@ class ContributionSeparationTests(unittest.TestCase):
         self.assertEqual(db.documents("users"), before)
 
 
+class CreationRequiresATicketTests(unittest.TestCase):
+    """Creation exists only as the tail of an approved registration."""
+
+    def test_a_source_ticket_id_is_required_to_build_the_input(self):
+        body = {
+            "name": "Alpha", "type": "learning", "track": "general",
+            "visibility": "private", "member_ids": ["uid_one"], "lead_id": "uid_one",
+        }
+        from pydantic import ValidationError
+        with self.assertRaises(ValidationError):
+            SPGCreate.model_validate(body)
+
+    def test_the_document_id_is_always_derived_from_the_ticket(self):
+        db = database()
+        spg, _ = create(db, create=create_payload(source_ticket_id="ticket_abc"))
+        self.assertEqual(spg.id, service.spg_id_for_ticket("ticket_abc"))
+
+    def test_the_same_ticket_always_maps_to_the_same_id(self):
+        self.assertEqual(
+            service.spg_id_for_ticket("ticket_abc"), service.spg_id_for_ticket("ticket_abc")
+        )
+        self.assertNotEqual(
+            service.spg_id_for_ticket("ticket_abc"), service.spg_id_for_ticket("ticket_abd")
+        )
+
+    def test_no_http_route_can_create_an_spg(self):
+        # The approval endpoint was removed: it accepted any ticket ID without
+        # ever reading the tickets collection, which made it a second creation
+        # path. Creation is service-only until a real ticket handler calls it.
+        from fastapi import FastAPI
+        from app.api.v1.endpoints import spg as endpoints
+
+        app = FastAPI()
+        app.include_router(endpoints.router, prefix="/api/v1")
+        paths = set(app.openapi()["paths"])
+        self.assertNotIn("/api/v1/spgs/approvals", paths)
+        self.assertNotIn("/api/v1/spgs/propositions", paths)
+        # and nothing else POSTs to the collection root either
+        self.assertNotIn("post", app.openapi()["paths"].get("/api/v1/spgs", {}))
+
+    def test_the_spg_service_never_reads_the_tickets_collection(self):
+        # If creation ever starts checking tickets, it must do so through a
+        # real ticket integration rather than a lookup invented here.
+        with open(service.__file__, encoding="utf-8") as handle:
+            source = handle.read()
+        self.assertNotIn('collection("tickets")', source)
+
+
 if __name__ == "__main__":
     unittest.main()

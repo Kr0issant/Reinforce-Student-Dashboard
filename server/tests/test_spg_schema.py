@@ -194,6 +194,7 @@ class SPGCreateTests(unittest.TestCase):
             "member_ids": ["uid_one", "uid_two"],
             "lead_id": "uid_one",
             "proposition_document_url": "https://storage.test/p.pdf",
+            "source_ticket_id": "ticket_001",
         }
         data.update(overrides)
         return data
@@ -217,6 +218,27 @@ class SPGCreateTests(unittest.TestCase):
     def test_duplicate_members_are_rejected(self):
         with self.assertRaises(ValidationError):
             SPGCreate.model_validate(self.payload(member_ids=["uid_one", "uid_one"]))
+
+    def test_a_source_ticket_id_is_required(self):
+        # Creation happens only after a ticket is approved, and the ticket ID
+        # is what makes a retried approval idempotent. Without one there is
+        # neither an approval behind the group nor a stable document ID.
+        with self.assertRaises(ValidationError):
+            SPGCreate.model_validate(self.payload(source_ticket_id=None))
+        body = self.payload()
+        del body["source_ticket_id"]
+        with self.assertRaises(ValidationError):
+            SPGCreate.model_validate(body)
+        for blank in ("", "   "):
+            with self.subTest(value=blank):
+                with self.assertRaises(ValidationError):
+                    SPGCreate.model_validate(self.payload(source_ticket_id=blank))
+
+    def test_the_record_keeps_source_ticket_id_optional_for_legacy_documents(self):
+        # Documents written before this workflow have no ticket and must still
+        # read back, which is why the requirement lives on SPGCreate only.
+        group = SPGRecord.model_validate(spg())
+        self.assertIsNone(group.source_ticket_id)
 
     def test_server_owned_fields_are_rejected(self):
         for field, value in {

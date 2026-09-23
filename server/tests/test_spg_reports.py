@@ -1,4 +1,4 @@
-"""Unit tests for SPG PDF reports.
+"""Unit tests for SPG reports, in both formats.
 
 Covers app/services/uploads.py and app/services/spg_reports.py. No Firebase,
 no network, no real storage: uploads go to the fake in tests/helpers.
@@ -11,7 +11,13 @@ from datetime import datetime, timedelta, timezone
 
 from pydantic import ValidationError
 
-from app.schemas.spg_reports import SPGReportRecord, SPGReportStatus, SPGReportType
+from app.schemas.spg_reports import (
+    SPGFormReportSubmission,
+    SPGReportFormat,
+    SPGReportRecord,
+    SPGReportStatus,
+    SPGReportType,
+)
 from app.services import spg_reports as service
 from app.services import uploads
 from tests.helpers.fake_firestore import FakeFirestore, run_transaction
@@ -20,6 +26,8 @@ from tests.helpers.fake_storage import NOT_PDF_BYTES, PDF_BYTES, FakeStorage
 NOW = datetime(2026, 9, 2, 10, 0, tzinfo=timezone.utc)
 ADMIN = "uid_admin"
 SPG_ID = "spg_001"
+HEADING = "Week two progress"
+DESCRIPTION = "Baseline model trained and benchmarked."
 
 
 def database() -> FakeFirestore:
@@ -80,8 +88,9 @@ class StoragePathTests(unittest.TestCase):
     def test_a_client_filename_never_reaches_the_path(self):
         storage = FakeStorage()
         db = database()
-        service.submit_report(
+        service.submit_pdf_report(
             db, spg_id=SPG_ID, payload=PDF_BYTES, submitted_by="uid_one",
+            heading=HEADING, short_description=DESCRIPTION,
             runner=run_transaction, now=NOW, store=storage.store,
         )
         path = storage.paths()[0]
@@ -97,11 +106,13 @@ class SubmissionTests(unittest.TestCase):
         self.storage = FakeStorage()
 
     def submit(self, **overrides):
-        return service.submit_report(
+        return service.submit_pdf_report(
             self.db,
             spg_id=overrides.pop("spg_id", SPG_ID),
             payload=overrides.pop("payload", PDF_BYTES),
             submitted_by=overrides.pop("submitted_by", "uid_one"),
+            heading=overrides.pop("heading", HEADING),
+            short_description=overrides.pop("short_description", DESCRIPTION),
             runner=run_transaction,
             now=overrides.pop("now", NOW),
             store=self.storage.store,
@@ -152,16 +163,20 @@ class SubmissionTests(unittest.TestCase):
         self.assertEqual(report.sequence_number, 1)
         self.assertIn(report.id, self.db.documents("spg_reports"))
 
-    def test_an_optional_summary_is_kept(self):
-        self.assertEqual(self.submit(summary="Week two").summary, "Week two")
+    def test_a_pdf_report_carries_the_listing_fields(self):
+        report = self.submit()
+        self.assertEqual(report.heading, HEADING)
+        self.assertEqual(report.short_description, DESCRIPTION)
+        self.assertIs(report.report_format, SPGReportFormat.PDF)
 
     def test_a_failed_write_does_not_leave_the_record(self):
         def failing_runner(db_, work):
             raise RuntimeError("write failed")
 
         with self.assertRaises(RuntimeError):
-            service.submit_report(
+            service.submit_pdf_report(
                 self.db, spg_id=SPG_ID, payload=PDF_BYTES, submitted_by="uid_one",
+                heading=HEADING, short_description=DESCRIPTION,
                 runner=failing_runner, now=NOW, store=self.storage.store,
             )
         self.assertEqual(self.db.documents("spg_reports"), {})
@@ -169,8 +184,9 @@ class SubmissionTests(unittest.TestCase):
     def test_a_failed_upload_writes_nothing(self):
         broken = FakeStorage(fail=True)
         with self.assertRaises(RuntimeError):
-            service.submit_report(
+            service.submit_pdf_report(
                 self.db, spg_id=SPG_ID, payload=PDF_BYTES, submitted_by="uid_one",
+                heading=HEADING, short_description=DESCRIPTION,
                 runner=run_transaction, now=NOW, store=broken.store,
             )
         self.assertEqual(self.db.documents("spg_reports"), {})
@@ -180,8 +196,9 @@ class VerificationTests(unittest.TestCase):
     def setUp(self):
         self.db = database()
         self.storage = FakeStorage()
-        self.report = service.submit_report(
+        self.report = service.submit_pdf_report(
             self.db, spg_id=SPG_ID, payload=PDF_BYTES, submitted_by="uid_one",
+            heading=HEADING, short_description=DESCRIPTION,
             runner=run_transaction, now=NOW, store=self.storage.store,
         )
 
@@ -234,8 +251,9 @@ class NoAutomaticPointsTests(unittest.TestCase):
         self.storage = FakeStorage()
 
     def submit(self):
-        return service.submit_report(
+        return service.submit_pdf_report(
             self.db, spg_id=SPG_ID, payload=PDF_BYTES, submitted_by="uid_one",
+            heading=HEADING, short_description=DESCRIPTION,
             runner=run_transaction, now=NOW, store=self.storage.store,
         )
 
@@ -275,8 +293,9 @@ class ReportListingTests(unittest.TestCase):
         self.db = database()
         self.storage = FakeStorage()
         for index in range(4):
-            service.submit_report(
+            service.submit_pdf_report(
                 self.db, spg_id=SPG_ID, payload=PDF_BYTES, submitted_by="uid_one",
+                heading=HEADING, short_description=DESCRIPTION,
                 report_type=SPGReportType.FINAL if index == 3 else SPGReportType.PROGRESS,
                 runner=run_transaction, now=NOW + timedelta(days=index),
                 store=self.storage.store,
@@ -314,7 +333,9 @@ class ReportListingTests(unittest.TestCase):
 class ReportSchemaTests(unittest.TestCase):
     def record(self, **overrides):
         data = {
-            "id": "rep_001", "spg_id": SPG_ID, "pdf_url": "https://storage.test/r.pdf",
+            "id": "rep_001", "spg_id": SPG_ID, "report_format": "pdf",
+            "heading": HEADING, "short_description": DESCRIPTION,
+            "pdf_url": "https://storage.test/r.pdf",
             "sequence_number": 1, "submitted_by": "uid_one", "submitted_at": NOW,
             "status": "pending",
         }
@@ -349,10 +370,262 @@ class ReportSchemaTests(unittest.TestCase):
                     SPGReportRecord.model_validate(self.record(sequence_number=bad))
 
     def test_unknown_fields_are_rejected(self):
-        for field, value in {"points": 20, "approved": True, "milestones": []}.items():
+        for field, value in {"points": 20, "approved": True, "reputation": 5}.items():
             with self.subTest(field=field):
                 with self.assertRaises(ValidationError):
                     SPGReportRecord.model_validate(self.record(**{field: value}))
+
+
+def form_submission(**overrides) -> SPGFormReportSubmission:
+    body = {
+        "heading": HEADING,
+        "short_description": DESCRIPTION,
+        "summary": "Trained the baseline and benchmarked it against last week.",
+        "milestones": ["Cleaned the dataset", "Trained a baseline LSTM"],
+        "blockers": "Not enough GPU credits for the full ensemble.",
+        "next_steps": "Implement the spatial encoder.",
+    }
+    body.update(overrides)
+    return SPGFormReportSubmission.model_validate(body)
+
+
+class FormSubmissionTests(unittest.TestCase):
+    def setUp(self):
+        self.db = database()
+
+    def submit(self, **overrides):
+        # Pop the control arguments before the rest become body overrides.
+        spg_id = overrides.pop("spg_id", SPG_ID)
+        submitted_by = overrides.pop("submitted_by", "uid_one")
+        moment = overrides.pop("now", NOW)
+        submission = overrides.pop("submission", None)
+        return service.submit_form_report(
+            self.db,
+            spg_id=spg_id,
+            submission=submission if submission is not None else form_submission(**overrides),
+            submitted_by=submitted_by,
+            runner=run_transaction,
+            now=moment,
+        )
+
+    def test_a_form_report_is_stored_in_firestore(self):
+        report = self.submit()
+        self.assertIs(report.report_format, SPGReportFormat.FORM)
+        self.assertEqual(report.spg_id, SPG_ID)
+        self.assertEqual(report.submitted_by, "uid_one")
+        self.assertIn(report.id, self.db.documents("spg_reports"))
+
+    def test_the_listing_fields_are_stored(self):
+        report = self.submit()
+        self.assertEqual(report.heading, HEADING)
+        self.assertEqual(report.short_description, DESCRIPTION)
+
+    def test_the_structured_content_is_stored(self):
+        # Submit first: documents() returns a fresh dict while the collection
+        # does not exist yet, so reading it before the write sees nothing.
+        report = self.submit()
+        stored = self.db.documents("spg_reports")[report.id]
+        self.assertEqual(stored["summary"], "Trained the baseline and benchmarked it against last week.")
+        self.assertEqual(stored["milestones"], ["Cleaned the dataset", "Trained a baseline LSTM"])
+        self.assertEqual(stored["blockers"], "Not enough GPU credits for the full ensemble.")
+        self.assertEqual(stored["next_steps"], "Implement the spatial encoder.")
+
+    def test_no_pdf_is_involved(self):
+        report = self.submit()
+        self.assertIsNone(report.pdf_url)
+
+    def test_a_form_report_starts_unverified(self):
+        report = self.submit()
+        self.assertIs(report.status, SPGReportStatus.PENDING)
+        self.assertFalse(report.is_verified)
+
+    def test_milestones_may_be_empty(self):
+        self.assertEqual(self.submit(milestones=[]).milestones, [])
+
+    def test_blockers_and_next_steps_are_optional(self):
+        report = self.submit(blockers=None, next_steps=None)
+        self.assertIsNone(report.blockers)
+        self.assertIsNone(report.next_steps)
+
+    def test_a_form_report_may_be_final(self):
+        report = self.submit(report_type=SPGReportType.FINAL)
+        self.assertIs(report.report_type, SPGReportType.FINAL)
+        self.assertIs(report.report_format, SPGReportFormat.FORM)
+
+    def test_sequence_numbers_increment(self):
+        numbers = [self.submit(now=NOW + timedelta(days=n)).sequence_number for n in range(3)]
+        self.assertEqual(numbers, [1, 2, 3])
+
+
+class FormSubmissionValidationTests(unittest.TestCase):
+    def test_heading_is_required(self):
+        for bad in (None, "", "   "):
+            with self.subTest(heading=bad):
+                with self.assertRaises(ValidationError):
+                    form_submission(heading=bad)
+
+    def test_short_description_is_required(self):
+        for bad in (None, "", "   "):
+            with self.subTest(short_description=bad):
+                with self.assertRaises(ValidationError):
+                    form_submission(short_description=bad)
+
+    def test_summary_is_required(self):
+        # The summary is the report; a form with none says nothing.
+        for bad in (None, "", "   "):
+            with self.subTest(summary=bad):
+                with self.assertRaises(ValidationError):
+                    form_submission(summary=bad)
+
+    def test_a_blank_milestone_is_rejected(self):
+        with self.assertRaises(ValidationError):
+            form_submission(milestones=["Real one", "   "])
+
+    def test_server_owned_and_pdf_fields_are_rejected(self):
+        for field, value in {
+            "pdf_url": "https://storage.test/r.pdf",
+            "report_format": "pdf",
+            "sequence_number": 1,
+            "submitted_by": "uid_two",
+            "status": "verified",
+            "points": 20,
+        }.items():
+            with self.subTest(field=field):
+                with self.assertRaises(ValidationError):
+                    form_submission(**{field: value})
+
+
+class MixedHistoryTests(unittest.TestCase):
+    """Both formats share one sequence, not a counter each."""
+
+    def setUp(self):
+        self.db = database()
+        self.storage = FakeStorage()
+
+    def pdf(self, day):
+        return service.submit_pdf_report(
+            self.db, spg_id=SPG_ID, payload=PDF_BYTES, submitted_by="uid_one",
+            heading=HEADING, short_description=DESCRIPTION,
+            runner=run_transaction, now=NOW + timedelta(days=day), store=self.storage.store,
+        )
+
+    def form(self, day):
+        return service.submit_form_report(
+            self.db, spg_id=SPG_ID, submission=form_submission(),
+            submitted_by="uid_one", runner=run_transaction, now=NOW + timedelta(days=day),
+        )
+
+    def test_form_and_pdf_share_one_sequence(self):
+        first = self.pdf(0)
+        second = self.form(1)
+        third = self.pdf(2)
+        self.assertEqual(
+            [first.sequence_number, second.sequence_number, third.sequence_number], [1, 2, 3]
+        )
+
+    def test_the_history_lists_both_formats_in_order(self):
+        self.form(0); self.pdf(1); self.form(2)
+        items, _ = service.list_reports(self.db, spg_id=SPG_ID)
+        self.assertEqual([i.sequence_number for i in items], [1, 2, 3])
+        self.assertEqual(
+            [i.report_format.value for i in items], ["form", "pdf", "form"]
+        )
+
+    def test_one_collection_holds_both(self):
+        self.form(0); self.pdf(1)
+        self.assertEqual(len(self.db.documents("spg_reports")), 2)
+        self.assertEqual(service.count_reports(self.db, SPG_ID), 2)
+
+    def test_an_admin_verifies_either_format(self):
+        for report in (self.form(0), self.pdf(1)):
+            with self.subTest(fmt=report.report_format.value):
+                verified = service.verify_report(
+                    self.db, report_id=report.id, admin_id=ADMIN,
+                    runner=run_transaction, now=NOW + timedelta(days=9),
+                )
+                self.assertIs(verified.status, SPGReportStatus.VERIFIED)
+                self.assertEqual(verified.verified_by, ADMIN)
+                self.assertIs(verified.report_format, report.report_format)
+
+
+class FormatInvariantTests(unittest.TestCase):
+    """A stored record carries one format's content, never both."""
+
+    def base(self, **overrides):
+        data = {
+            "id": "rep_001", "spg_id": SPG_ID, "heading": HEADING,
+            "short_description": DESCRIPTION, "sequence_number": 1,
+            "submitted_by": "uid_one", "submitted_at": NOW, "status": "pending",
+        }
+        data.update(overrides)
+        return data
+
+    def test_a_pdf_report_needs_a_pdf_url(self):
+        with self.assertRaises(ValidationError):
+            SPGReportRecord.model_validate(self.base(report_format="pdf"))
+
+    def test_a_pdf_report_cannot_carry_form_content(self):
+        for field, value in {
+            "summary": "typed", "blockers": "none", "next_steps": "more",
+            "milestones": ["one"],
+        }.items():
+            with self.subTest(field=field):
+                with self.assertRaises(ValidationError):
+                    SPGReportRecord.model_validate(self.base(
+                        report_format="pdf", pdf_url="https://storage.test/r.pdf",
+                        **{field: value},
+                    ))
+
+    def test_a_form_report_needs_a_summary(self):
+        with self.assertRaises(ValidationError):
+            SPGReportRecord.model_validate(self.base(report_format="form"))
+
+    def test_a_form_report_cannot_carry_a_pdf_url(self):
+        with self.assertRaises(ValidationError):
+            SPGReportRecord.model_validate(self.base(
+                report_format="form", summary="typed",
+                pdf_url="https://storage.test/r.pdf",
+            ))
+
+    def test_report_format_is_required(self):
+        with self.assertRaises(ValidationError):
+            SPGReportRecord.model_validate(self.base(pdf_url="https://storage.test/r.pdf"))
+
+    def test_format_values(self):
+        self.assertEqual({f.value for f in SPGReportFormat}, {"form", "pdf"})
+
+    def test_format_and_type_are_independent(self):
+        # report_type says what the report is about; report_format says how it
+        # was filed. Every combination is legitimate.
+        for report_type in ("progress", "final"):
+            with self.subTest(report_type=report_type):
+                SPGReportRecord.model_validate(self.base(
+                    report_format="form", summary="typed", report_type=report_type))
+                SPGReportRecord.model_validate(self.base(
+                    report_format="pdf", pdf_url="https://storage.test/r.pdf",
+                    report_type=report_type))
+
+
+class FormContributionSeparationTests(unittest.TestCase):
+    """A form report moves no points either."""
+
+    def setUp(self):
+        self.db = FakeFirestore({
+            "users": {"uid_one": {"id": "uid_one", "points": {"total": 0}}},
+        })
+
+    def test_submitting_and_verifying_a_form_report_awards_nothing(self):
+        before = copy.deepcopy(self.db.documents("users"))
+        report = service.submit_form_report(
+            self.db, spg_id=SPG_ID, submission=form_submission(),
+            submitted_by="uid_one", runner=run_transaction, now=NOW,
+        )
+        service.verify_report(
+            self.db, report_id=report.id, admin_id=ADMIN,
+            runner=run_transaction, now=NOW + timedelta(days=1),
+        )
+        self.assertEqual(self.db.documents("contributions"), {})
+        self.assertEqual(self.db.documents("users"), before)
 
 
 if __name__ == "__main__":

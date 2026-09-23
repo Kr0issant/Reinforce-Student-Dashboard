@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 
 from app.api.security import get_current_user
 from app.api.v1.endpoints import spg as endpoints
-from app.schemas.spgs import SPGStatus
+from app.schemas.spgs import SPGCreate, SPGStatus
 from app.services import spg_reports as reports_service
 from app.services import spgs as service
 from app.services import uploads
@@ -25,6 +25,9 @@ ADMIN = {"email": "admin@sst.scaler.com", "uid": "uid_admin", "admin": True}
 MEMBER = {"email": "one@sst.scaler.com", "uid": "uid_one"}
 OTHER_MEMBER = {"email": "two@sst.scaler.com", "uid": "uid_two"}
 OUTSIDER = {"email": "three@sst.scaler.com", "uid": "uid_three"}
+
+HEADING = "Week two progress"
+DESCRIPTION = "Baseline model trained and benchmarked."
 
 USERS = {
     "uid_one": {"id": "uid_one", "email": "one@sst.scaler.com", "full_name": "One"},
@@ -75,110 +78,112 @@ class SPGAPITestCase(unittest.TestCase):
     def sign_in_as(self, user: dict) -> None:
         self.user = dict(user)
 
-    def approve(self, **overrides):
-        return self.client.post("/api/v1/spgs/approvals", json={**REGISTRATION, **overrides})
-
     def create_spg(self, **overrides) -> str:
-        response = self.approve(**overrides)
-        self.assertEqual(response.status_code, 200, response.text)
-        return response.json()["id"]
+        """Seed an SPG through the service.
+
+        No HTTP route creates one: creation belongs to registration approval,
+        and the ticket domain that would drive it does not exist yet.
+        """
+        record, _created = service.create_spg(
+            self.db,
+            create=SPGCreate.model_validate({**REGISTRATION, **overrides}),
+            admin_id="uid_admin",
+            runner=run_transaction,
+        )
+        return record.id
 
     def upload_report(self, spg_id, payload=PDF_BYTES, content_type="application/pdf", **data):
+        body = {"heading": HEADING, "short_description": DESCRIPTION, **data}
         return self.client.post(
             f"/api/v1/spgs/{spg_id}/reports",
             files={"file": ("report.pdf", payload, content_type)},
-            data=data or None,
+            data=body,
         )
+
+    def submit_form(self, spg_id, **overrides):
+        body = {
+            "heading": HEADING,
+            "short_description": DESCRIPTION,
+            "summary": "Trained the baseline and benchmarked it.",
+            "milestones": ["Cleaned the dataset"],
+            "blockers": "Not enough GPU credits.",
+            "next_steps": "Implement the spatial encoder.",
+        }
+        body.update(overrides)
+        return self.client.post(f"/api/v1/spgs/{spg_id}/reports/form", json=body)
 
 
 class AdminAuthTests(SPGAPITestCase):
-    def test_admin_claim_is_accepted(self):
-        self.assertEqual(self.approve().status_code, 200)
+    def setUp(self):
+        super().setUp()
+        self.spg_id = self.create_spg()
 
-    def test_a_member_cannot_create_an_spg(self):
-        # Creation is reached through registration approval, never directly.
-        self.sign_in_as(MEMBER)
-        self.assertEqual(self.approve().status_code, 403)
+    def rename(self):
+        return self.client.patch(f"/api/v1/spgs/{self.spg_id}", json={"name": "Renamed"})
+
+    def test_admin_claim_is_accepted(self):
+        self.assertEqual(self.rename().status_code, 200)
 
     def test_false_and_truthy_claims_are_forbidden(self):
+        # The rule is `token.get("admin") is True`, so it fails closed.
         for claim in (False, "true", 1, None, []):
             with self.subTest(claim=claim):
                 self.sign_in_as({**MEMBER, "admin": claim})
-                self.assertEqual(self.approve().status_code, 403)
+                self.assertEqual(self.rename().status_code, 403)
 
     def test_every_management_route_is_closed_to_members(self):
-        spg_id = self.create_spg()
         self.sign_in_as(MEMBER)
         responses = [
-            self.client.post("/api/v1/spgs/approvals", json=REGISTRATION),
-            self.client.patch(f"/api/v1/spgs/{spg_id}", json={"name": "Renamed"}),
-            self.client.post(f"/api/v1/spgs/{spg_id}/members/uid_three"),
-            self.client.delete(f"/api/v1/spgs/{spg_id}/members/uid_two"),
-            self.client.patch(f"/api/v1/spgs/{spg_id}/lead", json={"new_lead_id": "uid_two"}),
-            self.client.post(f"/api/v1/spgs/{spg_id}/pause"),
-            self.client.post(f"/api/v1/spgs/{spg_id}/resume"),
-            self.client.post(f"/api/v1/spgs/{spg_id}/disband"),
+            self.client.patch(f"/api/v1/spgs/{self.spg_id}", json={"name": "Renamed"}),
+            self.client.post(f"/api/v1/spgs/{self.spg_id}/members/uid_three"),
+            self.client.delete(f"/api/v1/spgs/{self.spg_id}/members/uid_two"),
+            self.client.patch(f"/api/v1/spgs/{self.spg_id}/lead", json={"new_lead_id": "uid_two"}),
+            self.client.post(f"/api/v1/spgs/{self.spg_id}/pause"),
+            self.client.post(f"/api/v1/spgs/{self.spg_id}/resume"),
+            self.client.post(f"/api/v1/spgs/{self.spg_id}/disband"),
             self.client.post("/api/v1/spgs/reports/rep_x/verify"),
         ]
-        self.assertEqual([r.status_code for r in responses], [403] * 9)
+        self.assertEqual([r.status_code for r in responses], [403] * 8)
 
 
-class ApprovalEndpointTests(SPGAPITestCase):
-    def test_approval_creates_an_active_spg(self):
-        body = self.approve().json()
-        self.assertEqual(body["status"], "active")
-        self.assertEqual(body["member_ids"], ["uid_one", "uid_two"])
-        self.assertEqual(body["lead_id"], "uid_one")
-        self.assertEqual(body["created_by"], "uid_admin")
-        self.assertEqual(body["source_ticket_id"], "ticket_001")
-        self.assertEqual(body["report_count"], 0)
+class NoCreationRouteTests(SPGAPITestCase):
+    """No HTTP route creates an SPG.
 
-    def test_approving_the_same_ticket_twice_returns_one_spg(self):
-        first = self.approve().json()
-        second = self.approve().json()
-        self.assertEqual(first["id"], second["id"])
-        self.assertEqual(len(self.db.documents("spgs")), 1)
+    The approval endpoint that used to sit here accepted any `source_ticket_id`
+    without ever reading the tickets collection, which made it a second
+    creation path in a workflow that is supposed to have one. It was removed
+    rather than left to look like an approval it could not perform.
+    """
 
-    def test_a_project_without_a_proposition_is_rejected(self):
-        response = self.client.post(
-            "/api/v1/spgs/approvals",
-            json={k: v for k, v in REGISTRATION.items() if k != "proposition_document_url"},
-        )
-        self.assertEqual(response.status_code, 422)
+    def paths(self):
+        return self.client.app.openapi()["paths"]
 
-    def test_an_unknown_member_is_rejected(self):
-        self.assertEqual(self.approve(member_ids=["uid_one", "uid_ghost"]).status_code, 400)
+    def test_the_removed_endpoints_are_gone(self):
+        for path in ("/api/v1/spgs/approvals", "/api/v1/spgs/propositions"):
+            with self.subTest(path=path):
+                self.assertNotIn(path, self.paths())
 
-    def test_an_email_or_discord_id_cannot_be_a_member(self):
-        self.db.store["users"]["one@sst.scaler.com"] = {"email": "one@sst.scaler.com"}
-        self.db.store["users"]["123456789012345678"] = {"discord_id": "123456789012345678"}
-        for impostor in ("one@sst.scaler.com", "123456789012345678"):
-            with self.subTest(member=impostor):
-                response = self.approve(
-                    member_ids=["uid_one", impostor], source_ticket_id=f"t_{impostor}"
-                )
-                self.assertEqual(response.status_code, 400)
+    def test_posting_to_them_creates_nothing(self):
+        # 405 rather than 404: `GET /spgs/{spg_id}` still matches the path, so
+        # the route exists for reading and simply has no POST. Either way
+        # nothing is written.
+        for path in ("/api/v1/spgs/approvals", "/api/v1/spgs/propositions"):
+            with self.subTest(path=path):
+                response = self.client.post(path, json=REGISTRATION)
+                self.assertEqual(response.status_code, 405)
+        self.assertEqual(self.db.documents("spgs"), {})
 
-    def test_server_owned_fields_in_the_body_are_rejected(self):
-        for field, value in {
-            "id": "spg_forged", "status": "completed", "created_by": "uid_one",
-            "created_at": "2026-09-01T10:00:00+00:00", "report_count": 5,
-        }.items():
-            with self.subTest(field=field):
-                self.assertEqual(self.approve(**{field: value}).status_code, 422)
+    def test_nothing_posts_to_the_collection_root(self):
+        self.assertNotIn("post", self.paths().get("/api/v1/spgs", {}))
 
-    def test_an_event_spg_cannot_be_private(self):
-        response = self.approve(
-            type="event", visibility="private", proposition_document_url=None,
-        )
-        self.assertEqual(response.status_code, 422)
-
-    def test_an_event_spg_is_public(self):
-        body = self.approve(
-            type="event", visibility="public", proposition_document_url=None,
-            source_ticket_id="ticket_event",
-        ).json()
-        self.assertEqual(body["visibility"], "public")
+    def test_no_route_writes_the_spgs_collection_except_management(self):
+        # Every remaining write route needs an SPG that already exists, so
+        # none of them can bring one into being.
+        creating = [
+            p for p, ops in self.paths().items()
+            if "post" in ops and "{spg_id}" not in p and "{report_id}" not in p
+        ]
+        self.assertEqual(creating, [])
 
 
 class VisibilityTests(SPGAPITestCase):
@@ -450,20 +455,212 @@ class RoutingTests(SPGAPITestCase):
             for method in operations:
                 paths.add((method.upper(), path))
         for expected in (
-            ("POST", "/api/v1/spgs/approvals"),
-            ("POST", "/api/v1/spgs/propositions"),
             ("POST", "/api/v1/spgs/reports/{report_id}/verify"),
             ("GET", "/api/v1/spgs"),
             ("GET", "/api/v1/spgs/{spg_id}"),
             ("POST", "/api/v1/spgs/{spg_id}/reports"),
+            ("POST", "/api/v1/spgs/{spg_id}/reports/form"),
+            ("GET", "/api/v1/spgs/{spg_id}/reports"),
         ):
             with self.subTest(route=expected):
                 self.assertIn(expected, paths)
 
-    def test_approvals_resolves_to_its_own_handler(self):
-        # Declared before /{spg_id}; if that ordering broke, this would 404 as
-        # a lookup for an SPG called "approvals".
-        self.assertEqual(self.approve().status_code, 200)
+    def test_verify_resolves_to_its_own_handler(self):
+        # Declared before /{spg_id}; if that ordering broke, this would be read
+        # as a lookup for an SPG called "reports".
+        spg_id = self.create_spg()
+        self.sign_in_as(MEMBER)
+        report_id = self.upload_report(spg_id).json()["id"]
+        self.sign_in_as(ADMIN)
+        response = self.client.post(f"/api/v1/spgs/reports/{report_id}/verify")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "verified")
+
+    def test_the_form_route_is_not_read_as_a_report_id(self):
+        spg_id = self.create_spg()
+        self.sign_in_as(MEMBER)
+        self.assertEqual(self.submit_form(spg_id).status_code, 200)
+
+
+class FormReportEndpointTests(SPGAPITestCase):
+    def setUp(self):
+        super().setUp()
+        self.spg_id = self.create_spg()
+        self.sign_in_as(MEMBER)
+
+    def test_a_member_submits_a_form_report(self):
+        body = self.submit_form(self.spg_id).json()
+        self.assertEqual(body["report_format"], "form")
+        self.assertEqual(body["heading"], HEADING)
+        self.assertEqual(body["short_description"], DESCRIPTION)
+        self.assertEqual(body["submitted_by"], "uid_one")
+        self.assertEqual(body["status"], "pending")
+        self.assertIsNone(body["pdf_url"])
+
+    def test_the_structured_content_comes_back(self):
+        body = self.submit_form(self.spg_id).json()
+        self.assertEqual(body["summary"], "Trained the baseline and benchmarked it.")
+        self.assertEqual(body["milestones"], ["Cleaned the dataset"])
+        self.assertEqual(body["blockers"], "Not enough GPU credits.")
+        self.assertEqual(body["next_steps"], "Implement the spatial encoder.")
+
+    def test_heading_and_short_description_are_required(self):
+        for field in ("heading", "short_description", "summary"):
+            with self.subTest(field=field):
+                body = {
+                    "heading": HEADING, "short_description": DESCRIPTION,
+                    "summary": "Something happened.",
+                }
+                del body[field]
+                response = self.client.post(
+                    f"/api/v1/spgs/{self.spg_id}/reports/form", json=body
+                )
+                self.assertEqual(response.status_code, 422)
+
+    def test_a_form_report_may_omit_blockers_and_next_steps(self):
+        response = self.client.post(
+            f"/api/v1/spgs/{self.spg_id}/reports/form",
+            json={"heading": HEADING, "short_description": DESCRIPTION,
+                  "summary": "Quiet week, no blockers."},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["milestones"], [])
+
+    def test_a_pdf_url_cannot_be_forged_in_the_body(self):
+        self.assertEqual(
+            self.submit_form(self.spg_id, pdf_url="https://evil.test/x.pdf").status_code, 422
+        )
+
+    def test_server_owned_fields_are_rejected(self):
+        for field, value in {
+            "sequence_number": 99, "submitted_by": "uid_two",
+            "status": "verified", "report_format": "pdf", "id": "rep_forged",
+        }.items():
+            with self.subTest(field=field):
+                self.assertEqual(self.submit_form(self.spg_id, **{field: value}).status_code, 422)
+
+    def test_a_non_member_cannot_submit_a_form_report(self):
+        self.sign_in_as(OUTSIDER)
+        # Private SPG: not even discoverable.
+        self.assertEqual(self.submit_form(self.spg_id).status_code, 404)
+
+    def test_a_non_member_cannot_submit_to_a_public_spg(self):
+        self.sign_in_as(ADMIN)
+        public_id = self.create_spg(
+            visibility="public", source_ticket_id="ticket_pub", name="Open"
+        )
+        self.sign_in_as(OUTSIDER)
+        self.assertEqual(self.submit_form(public_id).status_code, 403)
+
+    def test_a_disbanded_spg_rejects_form_reports(self):
+        self.sign_in_as(ADMIN)
+        self.client.post(f"/api/v1/spgs/{self.spg_id}/disband")
+        self.sign_in_as(MEMBER)
+        self.assertEqual(self.submit_form(self.spg_id).status_code, 409)
+
+
+class MixedReportHistoryEndpointTests(SPGAPITestCase):
+    def setUp(self):
+        super().setUp()
+        self.spg_id = self.create_spg()
+        self.sign_in_as(MEMBER)
+
+    def test_form_and_pdf_share_one_sequence(self):
+        first = self.upload_report(self.spg_id).json()
+        second = self.submit_form(self.spg_id).json()
+        third = self.upload_report(self.spg_id).json()
+        self.assertEqual(
+            [first["sequence_number"], second["sequence_number"], third["sequence_number"]],
+            [1, 2, 3],
+        )
+
+    def test_the_history_lists_both_formats(self):
+        self.submit_form(self.spg_id)
+        self.upload_report(self.spg_id)
+        self.submit_form(self.spg_id)
+        body = self.client.get(f"/api/v1/spgs/{self.spg_id}/reports").json()
+        self.assertEqual([i["sequence_number"] for i in body["items"]], [1, 2, 3])
+        self.assertEqual(
+            [i["report_format"] for i in body["items"]], ["form", "pdf", "form"]
+        )
+
+    def test_the_report_count_covers_both(self):
+        self.submit_form(self.spg_id)
+        self.upload_report(self.spg_id)
+        self.sign_in_as(ADMIN)
+        self.assertEqual(self.client.get(f"/api/v1/spgs/{self.spg_id}").json()["report_count"], 2)
+
+    def test_an_admin_verifies_either_format(self):
+        pdf_id = self.upload_report(self.spg_id).json()["id"]
+        form_id = self.submit_form(self.spg_id).json()["id"]
+        self.sign_in_as(ADMIN)
+        for report_id in (pdf_id, form_id):
+            with self.subTest(report=report_id):
+                body = self.client.post(f"/api/v1/spgs/reports/{report_id}/verify").json()
+                self.assertEqual(body["status"], "verified")
+                self.assertEqual(body["verified_by"], "uid_admin")
+
+    def test_a_member_cannot_verify_either_format(self):
+        pdf_id = self.upload_report(self.spg_id).json()["id"]
+        form_id = self.submit_form(self.spg_id).json()["id"]
+        for report_id in (pdf_id, form_id):
+            with self.subTest(report=report_id):
+                self.assertEqual(
+                    self.client.post(f"/api/v1/spgs/reports/{report_id}/verify").status_code, 403
+                )
+
+    def test_neither_format_awards_anything(self):
+        self.db.store["users"]["uid_one"]["points"] = {"total": 0}
+        before = copy.deepcopy(self.db.documents("users"))
+        pdf_id = self.upload_report(self.spg_id).json()["id"]
+        form_id = self.submit_form(self.spg_id).json()["id"]
+        self.sign_in_as(ADMIN)
+        self.client.post(f"/api/v1/spgs/reports/{pdf_id}/verify")
+        self.client.post(f"/api/v1/spgs/reports/{form_id}/verify")
+        self.assertEqual(self.db.documents("contributions"), {})
+        self.assertEqual(self.db.documents("users"), before)
+
+
+class PDFReportListingFieldTests(SPGAPITestCase):
+    def setUp(self):
+        super().setUp()
+        self.spg_id = self.create_spg()
+        self.sign_in_as(MEMBER)
+
+    def test_a_pdf_report_carries_the_listing_fields(self):
+        body = self.upload_report(self.spg_id).json()
+        self.assertEqual(body["report_format"], "pdf")
+        self.assertEqual(body["heading"], HEADING)
+        self.assertEqual(body["short_description"], DESCRIPTION)
+        self.assertIsNotNone(body["pdf_url"])
+
+    def test_heading_and_short_description_are_required(self):
+        for field in ("heading", "short_description"):
+            with self.subTest(field=field):
+                data = {"heading": HEADING, "short_description": DESCRIPTION}
+                del data[field]
+                response = self.client.post(
+                    f"/api/v1/spgs/{self.spg_id}/reports",
+                    files={"file": ("report.pdf", PDF_BYTES, "application/pdf")},
+                    data=data,
+                )
+                self.assertEqual(response.status_code, 422)
+
+    def test_a_pdf_report_carries_no_form_content(self):
+        body = self.upload_report(self.spg_id).json()
+        self.assertIsNone(body["summary"])
+        self.assertIsNone(body["blockers"])
+        self.assertIsNone(body["next_steps"])
+        self.assertEqual(body["milestones"], [])
+
+    def test_a_blank_heading_is_rejected_and_stores_nothing(self):
+        response = self.client.post(
+            f"/api/v1/spgs/{self.spg_id}/reports",
+            files={"file": ("report.pdf", PDF_BYTES, "application/pdf")},
+            data={"heading": "   ", "short_description": DESCRIPTION},
+        )
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(self.db.documents("spg_reports"), {})
 
 
 if __name__ == "__main__":
