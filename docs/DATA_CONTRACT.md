@@ -168,6 +168,109 @@ ampersands**, not snake_case identifiers. They come from the Discord modal label
 
 ---
 
+## `spgs/{spg_id}`
+
+Student Project Groups. **Written only by this API** — the bot does not read or
+write this collection. Full workflow in [`SPG_WORKFLOW.md`](SPG_WORKFLOW.md).
+
+Document ID is derived from the approved registration ticket so that approving
+the same ticket twice cannot create two groups:
+`"spg_" + sha256("spg_registration:" + source_ticket_id)[:24]`.
+
+```jsonc
+{
+  "id":                       "spg_1f2e...",      // equals the document ID
+  "name":                     "string",           // 1-200, trimmed
+  "description":              "string | null",    // <= 2000
+  "type":                     "project",          // learning | project | event | external_event | miscellaneous
+  "track":                    "research",         // kaggle | product | research | general
+  "visibility":               "private",          // public | private; an event SPG is always public
+  "member_ids":               ["<firebase_uid>"], // >= 1, no duplicates, UIDs only
+  "lead_id":                  "<firebase_uid>",   // must be one of member_ids
+  "status":                   "active",           // active | paused | completed | disbanded
+  "created_by":               "<firebase_uid> | null",
+  "created_at":               "ISO-8601 | null",
+  "updated_at":               "ISO-8601 | null",
+  "completed_at":             "ISO-8601 | null",  // unused until completion exists
+  "proposition_document_url": "string | null",    // required for type=project at creation
+  "source_ticket_id":         "string | null"     // the spg_registration ticket
+}
+```
+
+⚠️ **`member_ids` holds Firebase UIDs, never emails or Discord IDs.** Because
+`users` is keyed three ways (see above), membership is validated by requiring
+the user document's `id` field to equal its own document ID — which only the
+`users/{uid}` profile writer sets. An email-keyed or Discord-keyed document is
+not an identity and is rejected.
+
+There is no `users.spg_ids`. `member_ids` is the only membership source.
+`progress` and a separate `health` field are **not** stored; both are derived
+for display.
+
+Server-owned fields are nullable so documents written before this workflow
+existed still validate on read.
+
+**Readers:** this API, and the contribution SPG award, which reads `member_ids`
+to write one contribution per member.
+
+---
+
+## `spg_reports/{report_id}`
+
+Append-only report history. **Written only by this API.** A report is a PDF;
+progress and final reports share this one shape.
+
+```jsonc
+{
+  "id":              "rep_9a8b...",     // equals the document ID
+  "spg_id":          "spg_1f2e...",
+  "report_type":     "progress",        // progress | final
+  "pdf_url":         "https://firebasestorage.googleapis.com/...",
+  "sequence_number": 1,                 // >= 1, per SPG, monotonic, never reused
+  "summary":         "string | null",   // optional note; never replaces the PDF
+  "submitted_by":    "<firebase_uid>",
+  "submitted_at":    "ISO-8601",
+  "status":          "pending",         // pending | verified
+  "verified_by":     "<firebase_uid> | null",
+  "verified_at":     "ISO-8601 | null"
+}
+```
+
+**Invariants**
+
+- `verified_by` and `verified_at` are both set exactly when `status == "verified"`,
+  and `verified_at >= submitted_at`
+- a stored report is never overwritten; a correction is a new report with the
+  next sequence number
+- submitting or verifying a report **awards no points and creates no
+  contribution** — that is a separate admin decision in the contribution
+  workflow
+
+Timestamps here are ISO-8601 strings, matching `users` rather than `tickets`.
+
+### Storage paths
+
+```
+spgs/{spg_id}/reports/{report_id}.pdf
+spgs/registrations/{request_id}/proposition.pdf
+```
+
+Server-generated from IDs the server created. A client filename never reaches
+a storage path.
+
+### Ticket linkage
+
+SPG registration is meant to raise an `spg_registration` ticket (see the
+`tickets` category table above) that a reviewer approves, and the approval
+creates the `spgs` document, recording the ticket in `source_ticket_id`.
+
+**The ticket write path does not exist yet.** Tickets are written by the bot;
+the API has no create or approve endpoint for them, so today an admin calls the
+approval endpoint directly. Adding a website write path into `tickets` changes
+a contract shared with the bot and needs a decision first.
+
+---
+
 ## Access rules
 
 - `report` category tickets are **confidential**. The Discord modal tells members
@@ -201,3 +304,14 @@ Indexes the bot already relies on. Do not break them:
 - `tickets` where `created_by.discord_id == ...`
 - `users` where `discord_id == ...` limit 1
 - `users` where `email == ...` limit 1
+
+Added by the SPG workflow. These are API-side only; the bot does not use them,
+but they need composite indexes in Firestore:
+
+- `spgs` where `status ==` / `type ==` / `track ==` / `visibility ==`, and any
+  two of those combined
+- `spg_reports` where `spg_id ==` order by `sequence_number`
+- `spg_reports` where `spg_id ==` and `report_type ==` order by `sequence_number`
+
+There is no `firestore.indexes.json` in this repository, so these must be
+created by whoever owns the Firebase console.
