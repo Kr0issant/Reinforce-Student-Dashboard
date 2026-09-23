@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from google.cloud import firestore
 
 from app.api.security import get_admin_user, get_current_user
-from app.utils import iso_str, now_iso
+from app.utils import is_admin_user, iso_str, now_iso
 from server.app.services.firebase import db
 from server.app.services.config import get_settings
 from app.schemas.tickets import (
@@ -47,18 +47,6 @@ TICKETS_COLLECTION = "tickets"
 MESSAGES_SUBCOLLECTION = "messages"
 USERS_COLLECTION = "users"
 MAX_MESSAGES = 300
-
-
-# ---------------------------------------------------------------------------
-# Internal Helpers
-# ---------------------------------------------------------------------------
-
-def _check_is_admin(user: dict) -> bool:
-    uid = user.get("uid")
-    if not uid:
-        return False
-    doc = db.collection(USERS_COLLECTION).document(uid).get()
-    return bool(doc.exists and (doc.to_dict() or {}).get("is_admin", False))
 
 
 def _extract_creator_uid(data: Dict[str, Any]) -> str:
@@ -194,7 +182,7 @@ def get_ticket(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found.")
 
     data = doc.to_dict() or {}
-    is_admin = _check_is_admin(current_user)
+    is_admin = is_admin_user(current_user)
     _verify_ticket_access(data, current_user, is_admin)
 
     return _to_ticket_detail(doc.id, data)
@@ -272,7 +260,7 @@ def get_ticket_messages(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found.")
 
     data = doc.to_dict() or {}
-    is_admin = _check_is_admin(current_user)
+    is_admin = is_admin_user(current_user)
     _verify_ticket_access(data, current_user, is_admin)
 
     stream = (
@@ -304,7 +292,7 @@ def post_ticket_message(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found.")
 
     data = doc.to_dict() or {}
-    is_admin = _check_is_admin(current_user)
+    is_admin = is_admin_user(current_user)
     _verify_ticket_access(data, current_user, is_admin)
 
     now = now_iso()
@@ -369,7 +357,7 @@ def close_ticket(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found.")
 
     data = doc.to_dict() or {}
-    is_admin = _check_is_admin(current_user)
+    is_admin = is_admin_user(current_user)
     _verify_ticket_access(data, current_user, is_admin)
 
     now = now_iso()

@@ -31,3 +31,25 @@ def slugify(text: str) -> str:
     s = re.sub(r"[^\w\s-]", "", s)
     s = re.sub(r"[\s_-]+", "-", s).strip("-")
     return s or "untitled"
+
+
+def is_admin_user(user: dict) -> bool:
+    """Check if the given user dictionary or Firestore user profile has admin privileges."""
+    if not user:
+        return False
+    if user.get("admin") is True or user.get("is_admin") is True:
+        return True
+    uid = user.get("uid")
+    if not uid:
+        return False
+    try:
+        from server.app.services.firebase import db
+        doc = db.collection("users").document(uid).get()
+        return bool(doc.exists and (doc.to_dict() or {}).get("is_admin", False))
+    except Exception:
+        return False
+
+
+def get_user_uid(user: dict) -> str:
+    """Safely extract the user UID from token payload."""
+    return user.get("uid") or ""
