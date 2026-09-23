@@ -7,7 +7,15 @@ import unittest
 
 from pydantic import ValidationError
 
-from app.schemas.spgs import SPGRecord, SPGStatus, SPGType
+from app.schemas.spgs import (
+    SPGCreate,
+    SPGRecord,
+    SPGStatus,
+    SPGTrack,
+    SPGType,
+    SPGUpdate,
+    SPGVisibility,
+)
 
 
 def spg(**overrides):
@@ -103,6 +111,143 @@ class SPGTypeTests(unittest.TestCase):
         group = SPGRecord.model_validate(spg(type="external_event"))
         self.assertEqual(group.model_dump(mode="json")["type"], "external_event")
         self.assertEqual(group.model_dump()["type"], "external_event")
+
+
+class SPGTrackTests(unittest.TestCase):
+    def test_track_values(self):
+        # Deliberately not ContributionTrack: that one ends in `misc`, the club
+        # SPG taxonomy ends in `general`.
+        self.assertEqual(
+            [t.value for t in SPGTrack], ["kaggle", "product", "research", "general"]
+        )
+
+    def test_track_defaults_to_general(self):
+        self.assertIs(SPGRecord.model_validate(spg()).track, SPGTrack.GENERAL)
+
+    def test_each_track_is_accepted(self):
+        for track in SPGTrack:
+            with self.subTest(track=track):
+                self.assertIs(SPGRecord.model_validate(spg(track=track.value)).track, track)
+
+    def test_unknown_track_is_rejected(self):
+        for bad in ("Kaggle", "misc", "general ", ""):
+            with self.subTest(track=bad):
+                with self.assertRaises(ValidationError):
+                    SPGRecord.model_validate(spg(track=bad))
+
+
+class SPGVisibilityTests(unittest.TestCase):
+    def test_visibility_values(self):
+        self.assertEqual({v.value for v in SPGVisibility}, {"public", "private"})
+
+    def test_an_event_spg_is_always_public(self):
+        self.assertIs(
+            SPGRecord.model_validate(spg(type="event")).visibility, SPGVisibility.PUBLIC
+        )
+
+    def test_an_explicitly_private_event_is_rejected(self):
+        with self.assertRaises(ValidationError):
+            SPGRecord.model_validate(spg(type="event", visibility="private"))
+
+    def test_a_project_may_be_public_or_private(self):
+        for visibility in ("public", "private"):
+            with self.subTest(visibility=visibility):
+                group = SPGRecord.model_validate(spg(type="project", visibility=visibility))
+                self.assertEqual(group.visibility.value, visibility)
+
+    def test_visibility_defaults_closed_for_non_events(self):
+        # Fail closed: a document written before visibility existed must not
+        # become publicly discoverable by default.
+        self.assertIs(
+            SPGRecord.model_validate(spg(type="project")).visibility, SPGVisibility.PRIVATE
+        )
+
+
+class LegacyDocumentTests(unittest.TestCase):
+    """Documents written before this workflow existed must still read back."""
+
+    def test_a_document_without_the_new_fields_validates(self):
+        group = SPGRecord.model_validate(spg())
+        self.assertIsNone(group.created_by)
+        self.assertIsNone(group.created_at)
+        self.assertIsNone(group.proposition_document_url)
+        self.assertIsNone(group.source_ticket_id)
+        self.assertIsNone(group.completed_at)
+
+    def test_the_contribution_award_fixture_still_validates(self):
+        # The contribution SPG award reads SPGRecord. This is the exact shape
+        # its tests store, and it must keep working.
+        SPGRecord.model_validate({
+            "id": "spg_001", "name": "Alpha", "type": "project",
+            "member_ids": ["uid_one", "uid_two"], "lead_id": "uid_one",
+            "status": "active",
+        })
+
+
+class SPGCreateTests(unittest.TestCase):
+    def payload(self, **overrides):
+        data = {
+            "name": "Alpha",
+            "type": "project",
+            "track": "research",
+            "visibility": "private",
+            "member_ids": ["uid_one", "uid_two"],
+            "lead_id": "uid_one",
+            "proposition_document_url": "https://storage.test/p.pdf",
+        }
+        data.update(overrides)
+        return data
+
+    def test_a_project_requires_a_proposition_document(self):
+        with self.assertRaises(ValidationError):
+            SPGCreate.model_validate(self.payload(proposition_document_url=None))
+
+    def test_a_non_project_does_not_require_one(self):
+        for spg_type in ("learning", "event", "external_event", "miscellaneous"):
+            with self.subTest(type=spg_type):
+                body = self.payload(proposition_document_url=None, type=spg_type)
+                if spg_type == "event":
+                    body["visibility"] = "public"
+                SPGCreate.model_validate(body)
+
+    def test_the_lead_must_be_a_member(self):
+        with self.assertRaises(ValidationError):
+            SPGCreate.model_validate(self.payload(lead_id="uid_outsider"))
+
+    def test_duplicate_members_are_rejected(self):
+        with self.assertRaises(ValidationError):
+            SPGCreate.model_validate(self.payload(member_ids=["uid_one", "uid_one"]))
+
+    def test_server_owned_fields_are_rejected(self):
+        for field, value in {
+            "id": "spg_forged",
+            "status": "completed",
+            "created_by": "uid_admin",
+            "created_at": "2026-09-01T10:00:00+00:00",
+            "completed_at": "2026-09-01T10:00:00+00:00",
+        }.items():
+            with self.subTest(field=field):
+                with self.assertRaises(ValidationError):
+                    SPGCreate.model_validate(self.payload(**{field: value}))
+
+
+class SPGUpdateTests(unittest.TestCase):
+    def test_only_metadata_is_editable(self):
+        SPGUpdate.model_validate({"name": "Renamed", "track": "product", "visibility": "public"})
+
+    def test_team_and_lifecycle_fields_are_rejected(self):
+        # Membership, lead and status have dedicated operations so a general
+        # PATCH cannot quietly change who is in a group or finish it.
+        for field, value in {
+            "member_ids": ["uid_one"],
+            "lead_id": "uid_two",
+            "status": "completed",
+            "type": "event",
+            "created_by": "uid_admin",
+        }.items():
+            with self.subTest(field=field):
+                with self.assertRaises(ValidationError):
+                    SPGUpdate.model_validate({field: value})
 
 
 if __name__ == "__main__":
