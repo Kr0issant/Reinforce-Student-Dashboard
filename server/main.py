@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.services.config import get_settings
 
-from app.api.v1.endpoints import auth, tickets, blogs, users, contributions
+from app.api.v1.endpoints import auth, tickets, blogs, users, contributions, spg
 
 settings = get_settings()
 app = FastAPI()
@@ -47,6 +47,7 @@ app.add_middleware(
 app.include_router(auth.router, prefix="/api/v1")
 app.include_router(users.router, prefix="/api/v1")
 app.include_router(contributions.router, prefix="/api/v1")
+app.include_router(spg.router, prefix="/api/v1")
 app.include_router(tickets.router, prefix="/api/v1")
 app.include_router(blogs.router, prefix="/api/v1")
 
