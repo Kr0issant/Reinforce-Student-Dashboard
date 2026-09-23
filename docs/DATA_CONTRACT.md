@@ -208,7 +208,10 @@ There is no `users.spg_ids`. `member_ids` is the only membership source.
 for display.
 
 Server-owned fields are nullable so documents written before this workflow
-existed still validate on read.
+existed still validate on read. **A newly created SPG always has a
+`source_ticket_id`**: creation goes through `create_spg()`, which requires one
+and derives the document ID from it. It is nullable here only for the older
+documents that predate the rule.
 
 **Readers:** this API, and the contribution SPG award, which reads `member_ids`
 to write one contribution per member.
@@ -217,17 +220,32 @@ to write one contribution per member.
 
 ## `spg_reports/{report_id}`
 
-Append-only report history. **Written only by this API.** A report is a PDF;
-progress and final reports share this one shape.
+Append-only report history. **Written only by this API.**
+
+A report is filed in one of two formats and the member chooses: a structured
+**form** stored here in Firestore, or an uploaded **PDF** kept in Firebase
+Storage. Both are this one shape in this one collection, and both share a
+single sequence per SPG.
 
 ```jsonc
 {
   "id":              "rep_9a8b...",     // equals the document ID
   "spg_id":          "spg_1f2e...",
-  "report_type":     "progress",        // progress | final
-  "pdf_url":         "https://firebasestorage.googleapis.com/...",
+  "report_type":     "progress",        // progress | final  — what it is about
+  "report_format":   "form",            // form | pdf        — how it was filed
+  "heading":         "Week two progress",      // required, both formats
+  "short_description": "Baseline trained.",    // required, both formats
   "sequence_number": 1,                 // >= 1, per SPG, monotonic, never reused
-  "summary":         "string | null",   // optional note; never replaces the PDF
+
+  // report_format == "pdf" only
+  "pdf_url":         "https://firebasestorage.googleapis.com/...",
+
+  // report_format == "form" only
+  "summary":         "string",          // required for a form report
+  "milestones":      ["string"],        // may be empty
+  "blockers":        "string | null",
+  "next_steps":      "string | null",
+
   "submitted_by":    "<firebase_uid>",
   "submitted_at":    "ISO-8601",
   "status":          "pending",         // pending | verified
@@ -236,12 +254,26 @@ progress and final reports share this one shape.
 }
 ```
 
-**Invariants**
+**Conditional invariants** — a record carries one format's content, never both:
+
+| `report_format` | Required | Must be absent |
+|---|---|---|
+| `pdf` | `pdf_url` | `summary`, `blockers`, `next_steps`; `milestones` empty |
+| `form` | `summary` | `pdf_url` |
+
+`heading` and `short_description` are required for both, because the dashboard
+lists every report the same way regardless of format.
+
+`report_type` and `report_format` are independent. All four combinations are
+valid: a `final` report may be a form, a `progress` report may be a PDF.
+
+**Other invariants**
 
 - `verified_by` and `verified_at` are both set exactly when `status == "verified"`,
   and `verified_at >= submitted_at`
 - a stored report is never overwritten; a correction is a new report with the
   next sequence number
+- form and PDF reports draw from **one** sequence per SPG, not one each
 - submitting or verifying a report **awards no points and creates no
   contribution** — that is a separate admin decision in the contribution
   workflow
@@ -264,10 +296,12 @@ SPG registration is meant to raise an `spg_registration` ticket (see the
 `tickets` category table above) that a reviewer approves, and the approval
 creates the `spgs` document, recording the ticket in `source_ticket_id`.
 
-**The ticket write path does not exist yet.** Tickets are written by the bot;
-the API has no create or approve endpoint for them, so today an admin calls the
-approval endpoint directly. Adding a website write path into `tickets` changes
-a contract shared with the bot and needs a decision first.
+**The ticket write path does not exist yet, and there is no HTTP route that
+creates an SPG.** Tickets are written by the bot; the API has no create or
+approve endpoint for them. `create_spg()` is an internal service that the
+ticket approval handler will call once that domain exists. Adding a website
+write path into `tickets` changes a contract shared with the bot and needs a
+decision first.
 
 ---
 
@@ -312,6 +346,10 @@ but they need composite indexes in Firestore:
   two of those combined
 - `spg_reports` where `spg_id ==` order by `sequence_number`
 - `spg_reports` where `spg_id ==` and `report_type ==` order by `sequence_number`
+
+`report_format` is stored but never filtered on — the report list is not
+segmented by format — so it needs no index. A field existing is not a reason
+to index it.
 
 There is no `firestore.indexes.json` in this repository, so these must be
 created by whoever owns the Firebase console.
