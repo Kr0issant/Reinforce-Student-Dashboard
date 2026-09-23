@@ -2,14 +2,16 @@
 
 Thin handlers over app/services/spgs.py and app/services/spg_reports.py.
 
-Members do not create SPGs here. A registration is meant to raise an
-`spg_registration` ticket that a reviewer approves, and the approval is what
-creates the group. The ticket domain does not exist in this repository yet —
-tickets are written by the Discord bot and mirrored read-only — so the member
-facing registration route is deliberately absent and `POST /spgs/approvals`
-stands in for the approval step. It calls the same `create_spg` service the
-ticket handler will call, so there will be one creation path, not two. See
-docs/SPG_WORKFLOW.md.
+**No route here creates an SPG.** A registration raises an `spg_registration`
+ticket, a reviewer approves it, and that approval calls `create_spg`. The
+ticket domain does not exist in this repository yet — tickets are written by
+the Discord bot and mirrored read-only — so creation stays an internal service
+rather than being fronted by an endpoint that would take a ticket ID it could
+not check. See docs/SPG_WORKFLOW.md.
+
+A report is either a filled-in form or an uploaded PDF. Both are the same
+record in the same collection, share one sequence per SPG, and carry a heading
+and a short description for the dashboard listing.
 
 Handlers are sync `def` on purpose: the Firestore client blocks, so FastAPI
 runs them in a threadpool instead of stalling the event loop.
@@ -28,14 +30,16 @@ from fastapi import (
     status,
 )
 
+from pydantic import ValidationError
+
 from app.api.security import get_current_user, require_admin
 from app.schemas.spg_reports import (
+    SPGFormReportSubmission,
     SPGReportPage,
     SPGReportRecord,
     SPGReportType,
 )
 from app.schemas.spgs import (
-    SPGCreate,
     SPGLeadUpdate,
     SPGPage,
     SPGResponse,
@@ -96,55 +100,18 @@ def _member_or_403(spg, user: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Registration approval. Declared before /{spg_id} so the path parameter
-# cannot swallow these fixed segments.
+# There is deliberately no creation route here.
+#
+# An SPG is created by approving an `spg_registration` ticket, and this
+# repository has no writable ticket domain yet. An endpoint that took a ticket
+# ID it never checked would be a second creation path wearing the name of the
+# first, so `create_spg` stays an internal service until the ticket approval
+# handler can call it with a ticket it has actually read. The proposition
+# upload helpers stay in app/services/uploads.py for that handler to use.
+#
+# Fixed segments below are declared before /{spg_id} so the path parameter
+# cannot swallow them.
 # ---------------------------------------------------------------------------
-
-@router.post(
-    "/propositions",
-    summary="Upload a proposition document for a registration (admin)",
-)
-def upload_proposition(
-    request_id: str = Form(..., description="The registration or ticket this belongs to"),
-    file: UploadFile = File(...),
-    admin: dict = Depends(require_admin),
-):
-    """Store a project SPG's proposition document and return its URL.
-
-    The URL is what `POST /spgs/approvals` records on the group. The stored
-    path is built from `request_id`, never from the uploaded filename.
-    """
-    try:
-        payload = uploads.read_pdf(file.file, file.content_type)
-    except uploads.UploadRejected as rejected:
-        raise HTTPException(status_code=400, detail=rejected.detail) from None
-    url = uploads.store_pdf(payload, uploads.proposition_path(request_id))
-    return {"request_id": request_id, "proposition_document_url": url}
-
-
-@router.post(
-    "/approvals",
-    response_model=SPGResponse,
-    summary="Create an SPG from an approved registration (admin)",
-)
-def approve_registration(
-    create: SPGCreate,
-    admin: dict = Depends(require_admin),
-    db: Any = Depends(get_db),
-) -> SPGResponse:
-    """The one creation path.
-
-    Everything is revalidated here rather than trusted from registration time:
-    a member may have left between submitting and approving. Approving the same
-    `source_ticket_id` twice returns the group that already exists instead of
-    creating a second one.
-    """
-    try:
-        record, _created = service.create_spg(db, create=create, admin_id=_uid(admin))
-    except service.SPGError as error:
-        raise _handle(error) from None
-    return _respond(db, record)
-
 
 @router.post(
     "/reports/{report_id}/verify",
@@ -310,25 +277,11 @@ def disband_spg(spg_id: str, admin: dict = Depends(require_admin), db: Any = Dep
 # Reports
 # ---------------------------------------------------------------------------
 
-@router.post(
-    "/{spg_id}/reports",
-    response_model=SPGReportRecord,
-    summary="Submit a PDF report",
-)
-def submit_report(
-    spg_id: str,
-    file: UploadFile = File(..., description="The report PDF"),
-    summary: Optional[str] = Form(None, description="Optional one-line note for the listing"),
-    report_type: SPGReportType = Form(SPGReportType.PROGRESS),
-    user: dict = Depends(get_current_user),
-    db: Any = Depends(get_db),
-) -> SPGReportRecord:
-    """File a report against an SPG the caller belongs to.
+def _reportable_or_error(db: Any, spg_id: str, user: dict):
+    """The SPG a caller may file a report against.
 
-    The PDF is the report: the club's template carries the progress,
-    milestones, blockers and next steps inside the document.
-
-    Submitting awards no points and creates no contribution.
+    Identical for both formats: the caller must be able to see the group, be a
+    member of it, and the group must still be running.
     """
     spg = _readable_or_404(db, spg_id, user)
     _member_or_403(spg, user)
@@ -337,19 +290,75 @@ def submit_report(
             status_code=409,
             detail=f"A {spg.status.value} SPG does not accept new reports.",
         )
+    return spg
+
+
+@router.post(
+    "/{spg_id}/reports",
+    response_model=SPGReportRecord,
+    summary="Submit a report as a PDF",
+)
+def submit_pdf_report(
+    spg_id: str,
+    file: UploadFile = File(..., description="The report PDF"),
+    heading: str = Form(..., description="Shown as the report's title in the listing"),
+    short_description: str = Form(..., description="One or two lines shown under the heading"),
+    report_type: SPGReportType = Form(SPGReportType.PROGRESS),
+    user: dict = Depends(get_current_user),
+    db: Any = Depends(get_db),
+) -> SPGReportRecord:
+    """File a report as a document.
+
+    The heading and the short description are what the dashboard lists; the
+    PDF is what opens when somebody wants the detail.
+
+    Submitting awards no points and creates no contribution.
+    """
+    _reportable_or_error(db, spg_id, user)
     try:
         payload = uploads.read_pdf(file.file, file.content_type)
     except uploads.UploadRejected as rejected:
         raise HTTPException(status_code=400, detail=rejected.detail) from None
 
     try:
-        return reports_service.submit_report(
+        return reports_service.submit_pdf_report(
             db,
             spg_id=spg_id,
+            heading=heading,
+            short_description=short_description,
             payload=payload,
             submitted_by=_uid(user),
             report_type=report_type,
-            summary=summary,
+        )
+    except ValidationError as error:
+        raise HTTPException(status_code=422, detail=error.errors()) from None
+    except reports_service.SPGReportError as error:
+        raise _handle(error) from None
+
+
+@router.post(
+    "/{spg_id}/reports/form",
+    response_model=SPGReportRecord,
+    summary="Submit a report as a structured form",
+)
+def submit_form_report(
+    spg_id: str,
+    submission: SPGFormReportSubmission,
+    user: dict = Depends(get_current_user),
+    db: Any = Depends(get_db),
+) -> SPGReportRecord:
+    """File a report by filling in the dashboard form.
+
+    Nothing is uploaded: the content is stored in Firestore and the dashboard
+    renders it directly. Same permissions, same sequence and same review path
+    as a PDF report.
+
+    Submitting awards no points and creates no contribution.
+    """
+    _reportable_or_error(db, spg_id, user)
+    try:
+        return reports_service.submit_form_report(
+            db, spg_id=spg_id, submission=submission, submitted_by=_uid(user)
         )
     except reports_service.SPGReportError as error:
         raise _handle(error) from None

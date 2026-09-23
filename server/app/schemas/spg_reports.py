@@ -1,11 +1,22 @@
 """SPG report schemas.
 
-One report model covers every report an SPG files. A report *is* its PDF: the
-club provides a template, and the progress, milestones, blockers and next steps
-live inside that document rather than in separate form fields.
+A member files a report in one of two formats, and chooses which:
+
+- **form** — the structured update typed into the dashboard, stored in
+  Firestore and rendered directly in the report list
+- **pdf** — a document uploaded to Firebase Storage, listed with an action that
+  opens it
+
+Both are the same record in the same collection. Both carry a `heading` and a
+`short_description`, which is what the dashboard shows before anyone opens
+anything, so a listing never has to branch on the format to render a row.
+
+`report_format` and `report_type` are different dimensions and neither implies
+the other: a `progress` report may be a form or a PDF, and so may a `final`
+one.
 
 Reports are immutable history. Correcting a mistake means filing another
-report, never overwriting one, so the sequence of submissions stays auditable.
+report, never overwriting one.
 
 Verification is review metadata and nothing else. Verifying a report awards no
 points and creates no contribution — an admin decides separately whether to
@@ -26,7 +37,7 @@ from pydantic import (
     model_validator,
 )
 
-from app.schemas.common import DescriptionStr, NonBlankStr
+from app.schemas.common import DescriptionStr, NonBlankStr, TitleStr
 
 UtcDatetime = Annotated[
     AwareDatetime,
@@ -47,6 +58,17 @@ class SPGReportType(str, Enum):
     FINAL = "final"
 
 
+class SPGReportFormat(str, Enum):
+    """How the report was filed — not what it is about.
+
+    Named `report_format` rather than `type` precisely because `report_type`
+    already exists and means something else.
+    """
+
+    FORM = "form"
+    PDF = "pdf"
+
+
 class SPGReportStatus(str, Enum):
     """Review state.
 
@@ -59,26 +81,74 @@ class SPGReportStatus(str, Enum):
     VERIFIED = "verified"
 
 
-class SPGReportRecord(BaseModel):
-    """A stored report document.
+class SPGFormReportSubmission(BaseModel):
+    """The JSON body for a form report.
 
-    `summary` is optional supporting text for the listing UI. It never replaces
-    the PDF, which is the report itself.
+    `summary` is required: it is the report. Milestones, blockers and next
+    steps mirror the dashboard's existing fields and are optional, because a
+    week with no blockers should not force the member to invent one.
     """
+
+    model_config = ConfigDict(extra="forbid")
+
+    heading: TitleStr
+    short_description: DescriptionStr
+    report_type: SPGReportType = SPGReportType.PROGRESS
+    summary: DescriptionStr
+    milestones: List[NonBlankStr] = Field(default_factory=list)
+    blockers: Optional[DescriptionStr] = None
+    next_steps: Optional[DescriptionStr] = None
+
+
+class SPGReportRecord(BaseModel):
+    """A stored report document, in either format."""
 
     model_config = ConfigDict(extra="forbid")
 
     id: NonBlankStr
     spg_id: NonBlankStr
     report_type: SPGReportType = SPGReportType.PROGRESS
-    pdf_url: NonBlankStr
+    report_format: SPGReportFormat
+    heading: TitleStr
+    short_description: DescriptionStr
     sequence_number: int = Field(strict=True, ge=1)
+
+    # Set for a PDF report only.
+    pdf_url: Optional[NonBlankStr] = None
+
+    # Set for a form report only.
     summary: Optional[DescriptionStr] = None
+    milestones: List[NonBlankStr] = Field(default_factory=list)
+    blockers: Optional[DescriptionStr] = None
+    next_steps: Optional[DescriptionStr] = None
+
     submitted_by: NonBlankStr
     submitted_at: UtcDatetime
     status: SPGReportStatus = SPGReportStatus.PENDING
     verified_by: Optional[NonBlankStr] = None
     verified_at: Optional[UtcDatetime] = None
+
+    @model_validator(mode="after")
+    def _content_matches_the_format(self):
+        """Each format carries its own content and not the other's.
+
+        A PDF report with a typed summary, or a form report pointing at a file,
+        would leave the dashboard guessing which one to render.
+        """
+        if self.report_format is SPGReportFormat.PDF:
+            if self.pdf_url is None:
+                raise ValueError("pdf_url is required when report_format is 'pdf'")
+            for field in ("summary", "blockers", "next_steps"):
+                if getattr(self, field) is not None:
+                    raise ValueError(f"{field} is not allowed when report_format is 'pdf'")
+            if self.milestones:
+                raise ValueError("milestones is not allowed when report_format is 'pdf'")
+        else:
+            if self.pdf_url is not None:
+                raise ValueError("pdf_url is not allowed when report_format is 'form'")
+            if self.summary is None:
+                raise ValueError("summary is required when report_format is 'form'")
+        return self
 
     @model_validator(mode="after")
     def _review_metadata_matches_status(self):

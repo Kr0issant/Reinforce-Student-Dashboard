@@ -1,8 +1,11 @@
 """SPG report submission, listing and verification.
 
-A report is a PDF. It is stored once and never rewritten: filing a correction
-means filing another report, so the history of what a group claimed, and when,
-stays intact.
+A report is either a filled-in form or an uploaded PDF, and the member chooses.
+Both land in the same collection through `_persist`, so they share one sequence
+per SPG and one set of rules rather than drifting apart.
+
+A report is stored once and never rewritten: filing a correction means filing
+another report, so the history of what a group claimed, and when, stays intact.
 
 Verifying a report records who reviewed it and when. It awards nothing. No
 contribution is created, no points move, and nothing here reads or writes the
@@ -17,6 +20,8 @@ from typing import Any, Callable, List, Optional, Tuple
 from pydantic import ValidationError
 
 from app.schemas.spg_reports import (
+    SPGFormReportSubmission,
+    SPGReportFormat,
     SPGReportRecord,
     SPGReportStatus,
     SPGReportType,
@@ -74,59 +79,114 @@ def next_sequence_number(db: Any, spg_id: str) -> int:
     return highest + 1
 
 
-def submit_report(
+def _persist(
+    db: Any,
+    *,
+    record_fields: dict,
+    runner: Callable[[Any, Callable[[Any], Any]], Any],
+) -> SPGReportRecord:
+    """Allocate the sequence number and write the report, in one transaction.
+
+    Both formats come through here, so they share one sequence per SPG and one
+    set of rules. Allocating inside the transaction is what stops two
+    submissions racing each other onto the same number.
+    """
+    collection = db.collection(REPORTS_COLLECTION)
+
+    def work(transaction: Any) -> SPGReportRecord:
+        record = SPGReportRecord(
+            sequence_number=next_sequence_number(db, record_fields["spg_id"]),
+            status=SPGReportStatus.PENDING,
+            **record_fields,
+        )
+        transaction.set(collection.document(record.id), record.model_dump())
+        return record
+
+    return runner(db, work)
+
+
+def submit_pdf_report(
     db: Any,
     *,
     spg_id: str,
+    heading: str,
+    short_description: str,
     payload: bytes,
     submitted_by: str,
     report_type: SPGReportType = SPGReportType.PROGRESS,
-    summary: Optional[str] = None,
     runner: Optional[Callable[[Any, Callable[[Any], Any]], Any]] = None,
     now: Optional[datetime] = None,
     store: Optional[Callable[[bytes, str], str]] = None,
 ) -> SPGReportRecord:
-    """Store one report's PDF and record it.
+    """File a report as an uploaded PDF.
 
-    The PDF is uploaded first and the document written second, both inside a
-    guard that removes the uploaded object if the write fails — otherwise a
-    failed submission would leave a file nobody can reach through any record.
+    The PDF is uploaded first and the document written second, inside a guard
+    that removes the uploaded object if the write fails — otherwise a failed
+    submission would leave a file nobody can reach through any record.
 
     Callers validate membership and SPG state before calling; this function
     owns storage, numbering and persistence.
     """
     runner = runner or run_in_transaction
     store = store or uploads.store_pdf
-    moment = now or utcnow()
-
     report_id = f"rep_{uuid.uuid4().hex[:24]}"
     destination = uploads.report_path(spg_id, report_id)
     pdf_url = store(payload, destination)
 
     try:
-        collection = db.collection(REPORTS_COLLECTION)
-
-        def work(transaction: Any) -> SPGReportRecord:
-            # Allocated inside the transaction so two submissions racing each
-            # other cannot both take the same number.
-            record = SPGReportRecord(
-                id=report_id,
-                spg_id=spg_id,
-                report_type=report_type,
-                pdf_url=pdf_url,
-                sequence_number=next_sequence_number(db, spg_id),
-                summary=summary,
-                submitted_by=submitted_by,
-                submitted_at=moment,
-                status=SPGReportStatus.PENDING,
-            )
-            transaction.set(collection.document(record.id), record.model_dump())
-            return record
-
-        return runner(db, work)
+        return _persist(
+            db,
+            record_fields={
+                "id": report_id,
+                "spg_id": spg_id,
+                "report_type": report_type,
+                "report_format": SPGReportFormat.PDF,
+                "heading": heading,
+                "short_description": short_description,
+                "pdf_url": pdf_url,
+                "submitted_by": submitted_by,
+                "submitted_at": now or utcnow(),
+            },
+            runner=runner,
+        )
     except Exception:
         _discard(destination)
         raise
+
+
+def submit_form_report(
+    db: Any,
+    *,
+    spg_id: str,
+    submission: SPGFormReportSubmission,
+    submitted_by: str,
+    runner: Optional[Callable[[Any, Callable[[Any], Any]], Any]] = None,
+    now: Optional[datetime] = None,
+) -> SPGReportRecord:
+    """File a report as the structured update typed into the dashboard.
+
+    Nothing is uploaded: the content is the record, so there is no storage
+    object to clean up if the write fails.
+    """
+    runner = runner or run_in_transaction
+    return _persist(
+        db,
+        record_fields={
+            "id": f"rep_{uuid.uuid4().hex[:24]}",
+            "spg_id": spg_id,
+            "report_type": submission.report_type,
+            "report_format": SPGReportFormat.FORM,
+            "heading": submission.heading,
+            "short_description": submission.short_description,
+            "summary": submission.summary,
+            "milestones": list(submission.milestones),
+            "blockers": submission.blockers,
+            "next_steps": submission.next_steps,
+            "submitted_by": submitted_by,
+            "submitted_at": now or utcnow(),
+        },
+        runner=runner,
+    )
 
 
 def _discard(destination_path: str) -> None:
