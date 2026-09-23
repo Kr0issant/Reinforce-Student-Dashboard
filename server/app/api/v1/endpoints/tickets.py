@@ -15,8 +15,8 @@ from google.cloud import firestore
 
 from app.api.security import get_admin_user, get_current_user
 from app.utils import is_admin_user, iso_str, now_iso
-from server.app.services.firebase import db
-from server.app.services.config import get_settings
+from app.services.firebase import db
+from app.services.config import get_settings
 from app.schemas.tickets import (
     AdminAssignTicket,
     AdminUpdateTicketPriority,

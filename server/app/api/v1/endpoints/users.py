@@ -13,8 +13,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, 
 from google.cloud import firestore
 
 from app.api.security import get_admin_user, get_current_user
-from server.app.services.firebase import db, upload_file_to_storage
-from server.app.services.config import get_settings
+from app.services.firebase import db, upload_file_to_storage
+from app.services.config import get_settings
 from app.schemas.users import (
     AdminUserUpdateRequest,
     DiscordVerifyRequest,

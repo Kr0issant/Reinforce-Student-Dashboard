@@ -8,7 +8,7 @@ from google.cloud import firestore
 
 from app.api.security import get_current_user
 from app.utils import iso_str, now_iso, slugify
-from server.app.services.firebase import db, upload_file_to_storage
+from app.services.firebase import db, upload_file_to_storage
 from app.schemas.blogs import (
     BlogCreate,
     BlogDetail,

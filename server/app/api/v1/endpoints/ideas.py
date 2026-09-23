@@ -14,7 +14,7 @@ from google.cloud import firestore
 
 from app.api.security import get_admin_user, get_current_user
 from app.utils import is_admin_user, iso_str, now_iso
-from server.app.services.firebase import db
+from app.services.firebase import db
 from app.schemas.ideas import (
     IdeaCreate,
     IdeaDetail,

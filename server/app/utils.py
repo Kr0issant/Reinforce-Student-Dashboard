@@ -43,7 +43,7 @@ def is_admin_user(user: dict) -> bool:
     if not uid:
         return False
     try:
-        from server.app.services.firebase import db
+        from app.services.firebase import db
         doc = db.collection("users").document(uid).get()
         return bool(doc.exists and (doc.to_dict() or {}).get("is_admin", False))
     except Exception:

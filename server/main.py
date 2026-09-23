@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.services.config import get_settings
 
-from app.api.v1.endpoints import auth, tickets, blogs, users, contributions, spg, ideas
+from app.api.v1.endpoints import tickets, blogs, users, contributions, spg, ideas
 
 settings = get_settings()
 app = FastAPI()
@@ -44,13 +44,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(auth.router, prefix="/api/v1")
-app.include_router(users.router, prefix="/api/v1")
-app.include_router(contributions.router, prefix="/api/v1")
-app.include_router(spg.router, prefix="/api/v1")
-app.include_router(tickets.router, prefix="/api/v1")
-app.include_router(blogs.router, prefix="/api/v1")
-app.include_router(ideas.router, prefix="/api/v1")
+API_PREFIX = "/api/v1"
+
+app.include_router(users.router, prefix=API_PREFIX)
+app.include_router(contributions.router, prefix=API_PREFIX)
+app.include_router(spg.router, prefix=API_PREFIX)
+app.include_router(tickets.router, prefix=API_PREFIX)
+app.include_router(blogs.router, prefix=API_PREFIX)
+app.include_router(ideas.router, prefix=API_PREFIX)
 
 @app.get("/")
 @app.head("/")
