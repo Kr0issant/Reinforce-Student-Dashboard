@@ -27,7 +27,7 @@ EXPECTED_ROUTES = {
     ("POST", "/api/v1/users/verify-discord"),
     ("GET", "/api/v1/users/leaderboard"),
     ("GET", "/api/v1/users"),
-    ("GET", "/api/v1/users/{user_id}"),
+    ("GET", "/api/v1/users/{id_or_email}"),
     ("PATCH", "/api/v1/users/{user_id}/status"),
 
     # SPGs
@@ -35,7 +35,8 @@ EXPECTED_ROUTES = {
     ("GET", "/api/v1/spgs/{spg_id}"),
     ("PATCH", "/api/v1/spgs/{spg_id}"),
     ("PATCH", "/api/v1/spgs/{spg_id}/lead"),
-    ("PATCH", "/api/v1/spgs/{spg_id}/status"),
+    ("POST", "/api/v1/spgs/{spg_id}/reports/pdf"),
+    ("POST", "/api/v1/spgs/{spg_id}/reports/form"),
 
     # Tickets
     ("GET", "/api/v1/tickets/my"),
@@ -52,12 +53,12 @@ EXPECTED_ROUTES = {
     ("GET", "/api/v1/blogs"),
     ("POST", "/api/v1/blogs"),
     ("GET", "/api/v1/blogs/{id_or_slug}"),
-    ("PUT", "/api/v1/blogs/{id}"),
-    ("DELETE", "/api/v1/blogs/{id}"),
-    ("POST", "/api/v1/blogs/{id}/upvote"),
-    ("GET", "/api/v1/blogs/{id}/comments"),
-    ("POST", "/api/v1/blogs/{id}/comments"),
-    ("DELETE", "/api/v1/blogs/{id}/comments/{cid}"),
+    ("PUT", "/api/v1/blogs/{blog_id}"),
+    ("DELETE", "/api/v1/blogs/{blog_id}"),
+    ("POST", "/api/v1/blogs/{blog_id}/upvote"),
+    ("GET", "/api/v1/blogs/{blog_id}/comments"),
+    ("POST", "/api/v1/blogs/{blog_id}/comments"),
+    ("DELETE", "/api/v1/blogs/{blog_id}/comments/{comment_id}"),
 
     # Ideas
     ("GET", "/api/v1/ideas"),
@@ -65,11 +66,11 @@ EXPECTED_ROUTES = {
     ("GET", "/api/v1/ideas/my"),
     ("GET", "/api/v1/ideas/pending"),
     ("POST", "/api/v1/ideas"),
-    ("GET", "/api/v1/ideas/{id}"),
-    ("PATCH", "/api/v1/ideas/{id}"),
-    ("DELETE", "/api/v1/ideas/{id}"),
-    ("POST", "/api/v1/ideas/{id}/approve"),
-    ("POST", "/api/v1/ideas/{id}/upvote"),
+    ("GET", "/api/v1/ideas/{idea_id}"),
+    ("PATCH", "/api/v1/ideas/{idea_id}"),
+    ("DELETE", "/api/v1/ideas/{idea_id}"),
+    ("POST", "/api/v1/ideas/{idea_id}/approve"),
+    ("POST", "/api/v1/ideas/{idea_id}/upvote"),
 
     # Events
     ("GET", "/api/v1/events"),

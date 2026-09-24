@@ -28,7 +28,7 @@ def sample_idea_create(**overrides):
         "track": IdeaTrack.RESEARCH,
         "prerequisites": ["Python", "PyTorch", "Quantization basics"],
         "rough_roadmap": ["Setup baseline", "Apply 4-bit quant", "Benchmark latency"],
-        "learning_objectives": ["Understand memory footprint of LLMs", "Profile on ARM hardware"],
+        "learning_outcomes": ["Understand memory footprint of LLMs", "Profile on ARM hardware"],
     }
     data.update(overrides)
     return data
@@ -64,19 +64,19 @@ class IdeaDocumentTests(unittest.TestCase):
             "track": "research",
             "prerequisites": ["Python"],
             "rough_roadmap": ["Benchmark"],
-            "learning_objectives": ["Profile LLMs"],
+            "learning_outcomes": ["Profile LLMs"],
             "is_verified": True,
             "created_by_uid": "user_001",
             "approved_by_uid": "admin_001",
             "approved_at": "2026-09-24T10:00:00Z",
-            "stats": {"upvotes": 12, "views": 45},
+            "stats": {"upvote_count": 12, "views_count": 45, "claims_count": 0},
             "created_at": "2026-09-24T09:00:00Z",
             "updated_at": "2026-09-24T10:00:00Z",
         }
         idea = IdeaDocument.model_validate(doc)
         self.assertEqual(idea.id, "idea_001")
         self.assertTrue(idea.is_verified)
-        self.assertEqual(idea.stats.upvotes, 12)
+        self.assertEqual(idea.stats.upvote_count, 12)
         self.assertEqual(idea.created_by_uid, "user_001")
         self.assertEqual(idea.approved_by_uid, "admin_001")
 

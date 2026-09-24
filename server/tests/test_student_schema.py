@@ -1,6 +1,13 @@
-"""Legacy redirect: Student models have been unified into User models.
+"""Legacy placeholder: Student models have been unified into User models in test_user_schema.py."""
 
-See test_user_schema.py for tests.
-"""
+import unittest
 
-from tests.test_user_schema import *  # noqa: F401, F403
+
+class StudentLegacyPlaceholderTests(unittest.TestCase):
+    def test_student_models_unified(self):
+        # Student models were unified into User models (users.py)
+        pass
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -7,13 +7,13 @@ import unittest
 from pydantic import ValidationError
 
 from app.schemas.blogs import (
-    BlogCommentCreate,
     BlogCreate,
     BlogDocument,
     BlogStatus,
     BlogSummary,
     BlogUpdate,
-    BlogUpvoteToggleResponse,
+    CommentCreate,
+    UpvoteToggleResponse,
     calculate_reading_time,
 )
 
@@ -68,7 +68,7 @@ class BlogUpdateTests(unittest.TestCase):
 
 class BlogCommentTests(unittest.TestCase):
     def test_valid_comment_create(self):
-        comment = BlogCommentCreate.model_validate({
+        comment = CommentCreate.model_validate({
             "content": "Great post! Could you explain the clipping ratio epsilon further?",
             "parent_id": None,
         })
@@ -77,7 +77,7 @@ class BlogCommentTests(unittest.TestCase):
 
     def test_empty_comment_rejected(self):
         with self.assertRaises(ValidationError):
-            BlogCommentCreate.model_validate({"content": "   "})
+            CommentCreate.model_validate({"content": "   "})
 
 
 class ReadingTimeCalculationTests(unittest.TestCase):

@@ -101,7 +101,7 @@ def list_events(
     status_filter: Optional[EventStatus] = Query(None, alias="status"),
     track: Optional[EventTrack] = None,
     event_type: Optional[EventType] = None,
-    timeline: Optional[str] = Query(None, regex="^(upcoming|past)$"),
+    timeline: Optional[str] = Query(None, pattern="^(upcoming|past)$"),
     search: Optional[str] = None,
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
