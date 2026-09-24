@@ -1,98 +1,93 @@
-"""Unit tests for the /blogs request models in app/schemas/blogs.py.
+"""Unit tests for the Blog schemas in app/schemas/blogs.py.
 
 No Firebase, no network. Every identifier is synthetic.
 """
 
 import unittest
-
 from pydantic import ValidationError
 
-from app.schemas.blogs import BlogCreate, BlogUpdate
-
-STORAGE_URL = (
-    "https://firebasestorage.googleapis.com/v0/b/demo-bucket.appspot.com"
-    "/o/blogs%2Fuser_001%2Fpost_001.md?alt=media"
+from app.schemas.blogs import (
+    BlogCreate,
+    BlogDocument,
+    BlogStatus,
+    BlogSummary,
+    BlogUpdate,
+    CommentCreate,
+    UpvoteToggleResponse,
+    calculate_reading_time,
 )
-SERVER_OWNED = {
-    "id": "blog_001",
-    "author_id": "user_001",
-    "created_at": "2026-09-01T10:00:00+00:00",
-    "updated_at": "2026-09-01T10:00:00+00:00",
-    "verified": True,
-    "is_verified": True,
-    "status": "approved",
-}
 
 
-def blog(**overrides):
-    data = {"title": "An introduction to RL", "content_url": STORAGE_URL, "summary": "Short guide."}
+def sample_blog(**overrides):
+    data = {
+        "title": "An Introduction to Reinforcement Learning with PPO",
+        "summary": "A comprehensive walkthrough of Proximal Policy Optimization with PyTorch baselines.",
+        "content": "# Intro to PPO\n\nPolicy gradient algorithms are foundational to RL...",
+        "tags": ["machine-learning", "reinforcement-learning", "pytorch"],
+        "cover_image_url": "https://example.com/cover.png",
+        "status": BlogStatus.DRAFT,
+    }
     data.update(overrides)
     return data
 
 
 class BlogCreateTests(unittest.TestCase):
     def test_valid_create(self):
-        created = BlogCreate.model_validate(blog())
-        self.assertEqual(created.content_url, STORAGE_URL)  # stored unchanged
+        created = BlogCreate.model_validate(sample_blog())
+        self.assertEqual(created.title, "An Introduction to Reinforcement Learning with PPO")
+        self.assertEqual(created.tags, ["machine-learning", "reinforcement-learning", "pytorch"])
+        self.assertEqual(created.status, BlogStatus.DRAFT)
 
-    def test_summary_is_optional(self):
-        body = blog()
-        del body["summary"]
-        self.assertIsNone(BlogCreate.model_validate(body).summary)
-
-    def test_title_must_be_1_to_200_characters(self):
-        for bad in ("", "   ", "t" * 201):
+    def test_title_must_be_3_to_200_characters(self):
+        for bad in ("", "  ", "ab", "t" * 201):
             with self.subTest(length=len(bad)):
                 with self.assertRaises(ValidationError):
-                    BlogCreate.model_validate(blog(title=bad))
+                    BlogCreate.model_validate(sample_blog(title=bad))
 
-    def test_summary_must_be_1_to_2000_characters(self):
-        for bad in ("", "   ", "s" * 2001):
+    def test_summary_must_be_10_to_500_characters(self):
+        for bad in ("", "   ", "too short", "s" * 501):
             with self.subTest(length=len(bad)):
                 with self.assertRaises(ValidationError):
-                    BlogCreate.model_validate(blog(summary=bad))
+                    BlogCreate.model_validate(sample_blog(summary=bad))
 
-    def test_content_url_must_be_https(self):
-        invalid = ("http://example.com/post.md", "ftp://example.com/post.md", "javascript:alert(1)",
-                   "https://", "not a url", "", "   ")
-        for url in invalid:
-            with self.subTest(url=url):
+    def test_empty_content_rejected(self):
+        for bad in ("", "   "):
+            with self.subTest(content=bad):
                 with self.assertRaises(ValidationError):
-                    BlogCreate.model_validate(blog(content_url=url))
-
-    def test_server_owned_fields_are_rejected(self):
-        for field, value in SERVER_OWNED.items():
-            with self.subTest(field=field):
-                with self.assertRaises(ValidationError):
-                    BlogCreate.model_validate(blog(**{field: value}))
+                    BlogCreate.model_validate(sample_blog(content=bad))
 
 
 class BlogUpdateTests(unittest.TestCase):
     def test_partial_update_keeps_only_sent_fields(self):
-        update = BlogUpdate.model_validate({"title": "A better title"})
-        self.assertEqual(update.model_dump(exclude_unset=True), {"title": "A better title"})
+        update = BlogUpdate.model_validate({"title": "A Better Guide to Deep Q-Networks"})
+        self.assertEqual(update.model_dump(exclude_unset=True), {"title": "A Better Guide to Deep Q-Networks"})
 
-    def test_summary_can_be_cleared(self):
-        self.assertEqual(BlogUpdate.model_validate({"summary": None}).model_dump(exclude_unset=True),
-                         {"summary": None})
+    def test_empty_update_is_valid(self):
+        self.assertEqual(BlogUpdate.model_validate({}).model_dump(exclude_unset=True), {})
 
-    def test_title_and_url_cannot_be_null(self):
-        for field in ("title", "content_url"):
-            with self.subTest(field=field):
-                with self.assertRaises(ValidationError):
-                    BlogUpdate.model_validate({field: None})
 
-    def test_update_applies_the_same_rules(self):
-        for body in ({"title": "  "}, {"content_url": "http://example.com/post.md"}, {"summary": "s" * 2001}):
-            with self.subTest(body=body):
-                with self.assertRaises(ValidationError):
-                    BlogUpdate.model_validate(body)
+class BlogCommentTests(unittest.TestCase):
+    def test_valid_comment_create(self):
+        comment = CommentCreate.model_validate({
+            "content": "Great post! Could you explain the clipping ratio epsilon further?",
+            "parent_id": None,
+        })
+        self.assertIsNone(comment.parent_id)
+        self.assertTrue(len(comment.content) > 10)
 
-    def test_server_owned_fields_are_rejected(self):
-        for field, value in SERVER_OWNED.items():
-            with self.subTest(field=field):
-                with self.assertRaises(ValidationError):
-                    BlogUpdate.model_validate({field: value})
+    def test_empty_comment_rejected(self):
+        with self.assertRaises(ValidationError):
+            CommentCreate.model_validate({"content": "   "})
+
+
+class ReadingTimeCalculationTests(unittest.TestCase):
+    def test_reading_time_calculation(self):
+        # 400 words should be ~2 minutes at 200 WPM
+        text = "word " * 400
+        self.assertEqual(calculate_reading_time(text), 2)
+
+        # Minimum 1 minute
+        self.assertEqual(calculate_reading_time("A short note."), 1)
 
 
 if __name__ == "__main__":

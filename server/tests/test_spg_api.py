@@ -95,7 +95,7 @@ class SPGAPITestCase(unittest.TestCase):
     def upload_report(self, spg_id, payload=PDF_BYTES, content_type="application/pdf", **data):
         body = {"heading": HEADING, "short_description": DESCRIPTION, **data}
         return self.client.post(
-            f"/api/v1/spgs/{spg_id}/reports",
+            f"/api/v1/spgs/{spg_id}/reports/pdf",
             files={"file": ("report.pdf", payload, content_type)},
             data=body,
         )
@@ -458,7 +458,7 @@ class RoutingTests(SPGAPITestCase):
             ("POST", "/api/v1/spgs/reports/{report_id}/verify"),
             ("GET", "/api/v1/spgs"),
             ("GET", "/api/v1/spgs/{spg_id}"),
-            ("POST", "/api/v1/spgs/{spg_id}/reports"),
+            ("POST", "/api/v1/spgs/{spg_id}/reports/pdf"),
             ("POST", "/api/v1/spgs/{spg_id}/reports/form"),
             ("GET", "/api/v1/spgs/{spg_id}/reports"),
         ):
@@ -640,7 +640,7 @@ class PDFReportListingFieldTests(SPGAPITestCase):
                 data = {"heading": HEADING, "short_description": DESCRIPTION}
                 del data[field]
                 response = self.client.post(
-                    f"/api/v1/spgs/{self.spg_id}/reports",
+                    f"/api/v1/spgs/{self.spg_id}/reports/pdf",
                     files={"file": ("report.pdf", PDF_BYTES, "application/pdf")},
                     data=data,
                 )
@@ -655,7 +655,7 @@ class PDFReportListingFieldTests(SPGAPITestCase):
 
     def test_a_blank_heading_is_rejected_and_stores_nothing(self):
         response = self.client.post(
-            f"/api/v1/spgs/{self.spg_id}/reports",
+            f"/api/v1/spgs/{self.spg_id}/reports/pdf",
             files={"file": ("report.pdf", PDF_BYTES, "application/pdf")},
             data={"heading": "   ", "short_description": DESCRIPTION},
         )

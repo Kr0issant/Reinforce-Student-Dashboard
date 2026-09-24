@@ -135,6 +135,7 @@ class SPGRecord(SPGBase):
     completed_at: Optional[UtcDatetime] = None
     proposition_document_url: Optional[NonBlankStr] = None
     source_ticket_id: Optional[NonBlankStr] = None
+    event_id: Optional[NonBlankStr] = None
 
     @model_validator(mode="after")
     def _members_are_unique_and_include_the_lead(self):

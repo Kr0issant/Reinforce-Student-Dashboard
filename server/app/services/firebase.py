@@ -44,14 +44,23 @@ def get_bucket():
     return storage.bucket()
 
 
-def __getattr__(name):
-    # Keeps `from app.services.firebase import db` working without initialising
-    # Firebase at import time.
-    if name == "db":
-        return get_db()
-    if name == "bucket":
-        return get_bucket()
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+class _LazyClient:
+    """Resolve an SDK client only when code first uses it.
+
+    A module ``__getattr__`` is still evaluated by ``from module import name``.
+    Keeping a real proxy object bound to the exported name makes route imports
+    credential-free while preserving the existing call sites.
+    """
+
+    def __init__(self, factory):
+        self._factory = factory
+
+    def __getattr__(self, name):
+        return getattr(self._factory(), name)
+
+
+db = _LazyClient(get_db)
+bucket = _LazyClient(get_bucket)
 
 
 def upload_file_to_storage(file_obj, destination_path: str, content_type: str) -> str:
@@ -63,7 +72,7 @@ def upload_file_to_storage(file_obj, destination_path: str, content_type: str) -
     blob.upload_from_file(file_obj, content_type=content_type)
 
     # Construct the public Firebase Storage URL manually
-    encoded_path = urllib.parse.quote(destination_path, safe='')
+    encoded_path = urllib.parse.quote(destination_path, safe="")
     public_url = f"https://firebasestorage.googleapis.com/v0/b/{bucket.name}/o/{encoded_path}?alt=media"
 
     return public_url

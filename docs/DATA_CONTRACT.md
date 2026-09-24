@@ -46,14 +46,24 @@ Timestamps here are **ISO-8601 strings**, written by the API with
 `datetime.now(timezone.utc).isoformat()`. This differs from the tickets collection —
 see the warning below.
 
-There is no `role` or `tier` field. RBAC does not exist yet.
+The current UID-keyed profile also stores `is_member`, `tier`, `batch_year`, and
+the cached per-track `points` map. `is_admin` in this profile is display metadata
+only; API authorization comes exclusively from the verified Firebase
+`admin == true` custom claim.
 
 ---
 
 ## `tickets/{auto_id}`
 
-Written by the bot when a member submits a ticket modal in Discord. Document ID is a
-Firestore auto-ID, **not** the Discord thread ID.
+Written by the bot when a member submits a ticket modal in Discord, or by the API
+when a member creates one in the dashboard. The bot uses a Firestore auto-ID; the
+API uses a `tkt_` ID. Neither uses the Discord thread ID.
+
+Dashboard-created documents use Firebase UID reference fields
+(`created_by_uid`, `assigned_to_uid`, and `closed_by_uid`). Older bot-created
+documents use the nested `TicketUser` objects below. Readers must accept both
+shapes. The YUVI bridge resolves `created_by_uid` through `users/{uid}.discord_id`
+before adding the member to the private thread.
 
 ```jsonc
 {
@@ -132,9 +142,37 @@ The Discord thread conversation, mirrored message by message in real time.
 ```
 
 `source` already distinguishes `discord` from `web`. The bot's schema anticipated a
-web write path that does not exist yet. Phase 2 fills it.
+web write path. Dashboard messages use `sender_uid`; older Discord messages use
+`sender_id`. API readers normalize either field into `sender_uid` on the wire.
 
 Ordered by `timestamp` ascending. The bot caps reads at 300 messages.
+
+---
+
+## `ideas/{idea_id}`
+
+The dashboard and bot historically used different names for the same values.
+During the compatibility window, writers set both names and readers accept either:
+
+| Dashboard field | Legacy YUVI field | Meaning |
+|---|---|---|
+| `is_verified` | `is_approved` | visible in the public idea feed |
+| `rough_roadmap` | `roadmap` | ordered implementation steps |
+| `created_by_uid` | `created_by.discord_id` | submitting member identity |
+| `approved_by_uid` | `approved_by.discord_id` | approving admin identity |
+
+YUVI's `other` track maps to the dashboard's `misc` track at the API boundary.
+New YUVI writes resolve linked Discord IDs to Firebase UIDs when the user profile
+is available. Existing legacy documents remain readable without a migration.
+
+---
+
+## `event_slugs/{sha256(slug)}`
+
+Internal reservation documents keep event slugs unique under concurrent admin
+creates and updates. Each document stores `slug`, `event_id`, and `updated_at`.
+Event readers continue to resolve slugs from `events/{event_id}.slug`; clients do
+not read this collection directly.
 
 ---
 
@@ -296,12 +334,9 @@ SPG registration is meant to raise an `spg_registration` ticket (see the
 `tickets` category table above) that a reviewer approves, and the approval
 creates the `spgs` document, recording the ticket in `source_ticket_id`.
 
-**The ticket write path does not exist yet, and there is no HTTP route that
-creates an SPG.** Tickets are written by the bot; the API has no create or
-approve endpoint for them. `create_spg()` is an internal service that the
-ticket approval handler will call once that domain exists. Adding a website
-write path into `tickets` changes a contract shared with the bot and needs a
-decision first.
+The dashboard ticket write path now exists. There is still no HTTP route that
+approves an SPG registration ticket into an SPG; `create_spg()` remains the
+internal service that approval will call once that workflow is implemented.
 
 ---
 
@@ -310,10 +345,9 @@ decision first.
 - `report` category tickets are **confidential**. The Discord modal tells members
   they are visible only to core admins. Any mirror of this collection must filter
   `category == "report"` out of member-facing views and gate it behind an admin role
-  — which does not exist yet. Until RBAC ships, **do not surface `report` tickets on
-  the website at all.**
-- Members may only read tickets where `created_by.discord_id` matches their own
-  linked Discord ID.
+  through the Firebase `admin == true` custom claim.
+- Members may only read tickets where `created_by_uid` is their Firebase UID or
+  where legacy `created_by.discord_id` matches their linked Discord ID.
 - Firebase Admin credentials are server-side only. The browser never reads Firestore
   directly; every read goes through the FastAPI service.
 

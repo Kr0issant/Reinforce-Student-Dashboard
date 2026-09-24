@@ -13,8 +13,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, 
 from google.cloud import firestore
 
 from app.api.security import get_admin_user, get_current_user
-from server.app.services.firebase import db, upload_file_to_storage
-from server.app.services.config import get_settings
+from app.services.firebase import db, upload_file_to_storage
+from app.services.config import get_settings
 from app.schemas.users import (
     AdminUserUpdateRequest,
     DiscordVerifyRequest,
@@ -37,8 +37,7 @@ USERS_COLLECTION = "users"
 VALID_TRACKS = {"total", "kaggle", "product", "research", "misc"}
 
 
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+from app.utils import now_iso
 
 
 def _to_user_me(uid: str, data: Dict[str, Any]) -> UserMeResponse:
@@ -62,6 +61,7 @@ def _to_user_me(uid: str, data: Dict[str, Any]) -> UserMeResponse:
         is_admin=bool(data.get("is_admin", False)),
         is_member=bool(data.get("is_member", False)),
         tier=data.get("tier") or MemberTier.BEGINNER,
+        batch_year=data.get("batch_year"),
         is_verified=bool(data.get("is_verified", False)),
         verified_at=data.get("verified_at"),
         points=points,
@@ -93,6 +93,7 @@ def _to_user_public(uid: str, data: Dict[str, Any]) -> UserPublicResponse:
         bio=data.get("bio"),
         is_member=bool(data.get("is_member", False)),
         tier=data.get("tier") or MemberTier.BEGINNER,
+        batch_year=data.get("batch_year"),
         is_verified=bool(data.get("is_verified", False)),
         skills=data.get("skills") or [],
         social_links=social_links,
@@ -109,7 +110,7 @@ def _get_or_create_user(user_token: dict) -> UserMeResponse:
     doc_ref = db.collection(USERS_COLLECTION).document(uid)
     doc = doc_ref.get()
 
-    now = _now_iso()
+    now = now_iso()
     if doc.exists:
         data = doc.to_dict() or {}
         # Keep last login fresh
@@ -164,7 +165,7 @@ def update_me(
     if not doc.exists:
         _get_or_create_user(current_user)
 
-    now = _now_iso()
+    now = now_iso()
     updates: Dict[str, Any] = {"updated_at": now}
 
     if payload.full_name is not None:
@@ -175,6 +176,8 @@ def update_me(
         updates["bio"] = payload.bio.strip()
     if payload.skills is not None:
         updates["skills"] = [s.strip() for s in payload.skills if s.strip()]
+    if payload.batch_year is not None:
+        updates["batch_year"] = payload.batch_year
     if payload.social_links is not None:
         updates["social_links"] = payload.social_links.model_dump()
 
@@ -200,7 +203,7 @@ def verify_discord(
 
     email = (current_user.get("email") or "").lower().strip()
     name = current_user.get("name") or (email.split("@")[0] if email else "Club Member")
-    now = _now_iso()
+    now = now_iso()
 
     doc_ref = db.collection(USERS_COLLECTION).document(uid)
     update_data = {
@@ -285,7 +288,7 @@ def unlink_discord(current_user: dict = Depends(get_current_user)):
     old_data = doc.to_dict() or {}
     old_discord_id = old_data.get("discord_id")
 
-    now = _now_iso()
+    now = now_iso()
     doc_ref.set({
         "discord_id": None,
         "is_verified": False,
@@ -322,7 +325,7 @@ def upload_avatar(
     avatar_url = upload_file_to_storage(file.file, destination_path, file.content_type)
     db.collection(USERS_COLLECTION).document(uid).set({
         "avatar_url": avatar_url,
-        "updated_at": _now_iso(),
+        "updated_at": now_iso(),
     }, merge=True)
 
     return {"message": "Avatar updated successfully", "avatar_url": avatar_url}
@@ -345,7 +348,7 @@ def update_user_status(
     if not doc.exists:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
-    now = _now_iso()
+    now = now_iso()
     updates: Dict[str, Any] = {"updated_at": now}
 
     if payload.is_member is not None:

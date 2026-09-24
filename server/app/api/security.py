@@ -4,23 +4,19 @@ from firebase_admin import auth
 
 from app.services.firebase import ensure_app
 
-security = HTTPBearer()
+security = HTTPBearer(auto_error=False)
 
 ALLOWED_DOMAINS = ("@sst.scaler.com", "@scaler.com")
 
 
-def get_current_user(
-    cred: HTTPAuthorizationCredentials = Depends(security)
-) -> dict:
-    # Firebase must be initialised before a token can be verified.
-    ensure_app()
-
+def _verify_credential(cred: HTTPAuthorizationCredentials) -> dict:
     if not cred:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authentication credentials"
+            detail="Invalid authentication credentials",
         )
 
+    ensure_app()
     try:
         # Verifies the token and decodes the user payload
         decoded_token = auth.verify_id_token(cred.credentials)
@@ -30,16 +26,28 @@ def get_current_user(
         if not any(email.endswith(domain) for domain in ALLOWED_DOMAINS):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="An SST/Scaler email (@sst.scaler.com or @scaler.com) is required for club access."
+                detail="An SST/Scaler email (@sst.scaler.com or @scaler.com) is required for club access.",
             )
 
         return decoded_token
 
     except auth.InvalidIdTokenError:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired token"
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token"
         )
+
+
+def get_current_user(cred: HTTPAuthorizationCredentials = Depends(security)) -> dict:
+    return _verify_credential(cred)
+
+
+def get_optional_current_user(
+    cred: HTTPAuthorizationCredentials = Depends(security),
+) -> dict | None:
+    """Return a verified user when supplied, otherwise allow public access."""
+    if cred is None:
+        return None
+    return _verify_credential(cred)
 
 
 def require_admin(user: dict = Depends(get_current_user)) -> dict:

@@ -294,7 +294,7 @@ def _reportable_or_error(db: Any, spg_id: str, user: dict):
 
 
 @router.post(
-    "/{spg_id}/reports",
+    "/{spg_id}/reports/pdf",
     response_model=SPGReportRecord,
     summary="Submit a report as a PDF",
 )
