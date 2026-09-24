@@ -34,20 +34,8 @@ def slugify(text: str) -> str:
 
 
 def is_admin_user(user: dict) -> bool:
-    """Check if the given user dictionary or Firestore user profile has admin privileges."""
-    if not user:
-        return False
-    if user.get("admin") is True or user.get("is_admin") is True:
-        return True
-    uid = user.get("uid")
-    if not uid:
-        return False
-    try:
-        from app.services.firebase import db
-        doc = db.collection("users").document(uid).get()
-        return bool(doc.exists and (doc.to_dict() or {}).get("is_admin", False))
-    except Exception:
-        return False
+    """Use the verified Firebase custom claim as the sole admin authority."""
+    return bool(user and user.get("admin") is True)
 
 
 def get_user_uid(user: dict) -> str:

@@ -6,9 +6,9 @@ attendance roll-call, competition awarding, and feedback collection.
 Strictly follows zero user denormalization (pure UID references).
 """
 
-from datetime import datetime, timezone
+from datetime import timezone
 from enum import Enum
-from typing import Annotated, Any, Dict, List, Optional
+from typing import Annotated, List, Optional
 from pydantic import (
     AfterValidator,
     AwareDatetime,
@@ -16,7 +16,6 @@ from pydantic import (
     ConfigDict,
     Field,
     PlainSerializer,
-    model_validator,
 )
 
 from app.schemas.common import DescriptionStr, NonBlankStr, TitleStr
@@ -95,6 +94,7 @@ class EventSPGStatus(str, Enum):
 
 # --- Nested Config Models ---
 
+
 class VenueInfo(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -125,7 +125,9 @@ class EventEligibility(BaseModel):
 
     access_scope: AccessScope = AccessScope.OPEN_TO_ALL
     allowed_years: List[int] = Field(default_factory=lambda: [1, 2, 3, 4])
-    allowed_tiers: List[str] = Field(default_factory=lambda: ["beginner", "advanced", "all"])
+    allowed_tiers: List[str] = Field(
+        default_factory=lambda: ["beginner", "advanced", "all"]
+    )
     allowed_tracks: List[str] = Field(default_factory=lambda: ["all"])
     custom_note: Optional[str] = None
     is_mandatory: bool = False
@@ -170,6 +172,7 @@ class EventStats(BaseModel):
 
 
 # --- Event Main Schemas ---
+
 
 class EventCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -217,6 +220,7 @@ class EventStatusUpdate(BaseModel):
 
 class EventDocument(BaseModel):
     """Full Event document schema stored in Firestore."""
+
     model_config = ConfigDict(extra="ignore")
 
     id: str
@@ -230,7 +234,9 @@ class EventDocument(BaseModel):
     venue_info: VenueInfo = Field(default_factory=VenueInfo)
     schedule: EventSchedule
     eligibility: EventEligibility = Field(default_factory=EventEligibility)
-    participation: EventParticipationConfig = Field(default_factory=EventParticipationConfig)
+    participation: EventParticipationConfig = Field(
+        default_factory=EventParticipationConfig
+    )
     points_reward: PointsRewardConfig = Field(default_factory=PointsRewardConfig)
     resources: EventResources = Field(default_factory=EventResources)
     stats: EventStats = Field(default_factory=EventStats)
@@ -263,6 +269,7 @@ class EventListResponse(BaseModel):
 
 # --- Registration Schemas (Pure UIDs) ---
 
+
 class EventRegisterRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -272,6 +279,7 @@ class EventRegisterRequest(BaseModel):
 
 class RegistrationDocument(BaseModel):
     """Registration record stored in events/{event_id}/registrations/{reg_id}."""
+
     model_config = ConfigDict(extra="ignore")
 
     id: str
@@ -293,6 +301,7 @@ class MyRegistrationResponse(BaseModel):
 
 
 # --- Admin Actions Schemas ---
+
 
 class RollCallRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -316,7 +325,7 @@ class WinnerAwardEntry(BaseModel):
     user_uid: NonBlankStr
     rank: int = Field(ge=1, le=100)
     points: int = Field(ge=1)
-    note: Optional[str] = None
+    note: Optional[DescriptionStr] = None
 
 
 class WinnerAwardRequest(BaseModel):
@@ -333,6 +342,7 @@ class WinnerAwardResponse(BaseModel):
 
 # --- SPG Decision Schema ---
 
+
 class SPGDecisionAction(str, Enum):
     CONVERT_PERMANENT = "convert_permanent"
     DISBAND = "disband"
@@ -345,6 +355,7 @@ class SPGDecisionRequest(BaseModel):
 
 
 # --- Feedback Schemas ---
+
 
 class FeedbackSubmitRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -384,4 +395,3 @@ class EventRecord(BaseModel):
 
     id: NonBlankStr
     name: TitleStr
-

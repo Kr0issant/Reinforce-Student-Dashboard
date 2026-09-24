@@ -4,7 +4,9 @@ Implements the ticket pipeline connecting the Web Dashboard and Discord YUVI bot
 Maintains pure UID references with zero user denormalization.
 """
 
+import hashlib
 import json
+import secrets
 from typing import Any, Dict, List, Optional
 import urllib.error
 import urllib.request
@@ -30,14 +32,12 @@ from app.schemas.tickets import (
     TicketCloseRequest,
     TicketCreate,
     TicketDetail,
-    TicketDocument,
     TicketListResponse,
     TicketMessage,
     TicketMessageCreate,
     TicketPriority,
     TicketStatus,
     TicketSummary,
-    TicketThread,
 )
 
 router = APIRouter(prefix="/tickets", tags=["Tickets"])
@@ -49,13 +49,46 @@ USERS_COLLECTION = "users"
 MAX_MESSAGES = 300
 
 
+def _bot_endpoint(path: str) -> str:
+    base = settings.yuvi_bot_url.rstrip("/")
+    legacy_verify_path = "/internal/verify-success"
+    if base.endswith(legacy_verify_path):
+        base = base[: -len(legacy_verify_path)]
+    return f"{base}/{path.lstrip('/')}"
+
+
+def _identity_keys(current_user: dict) -> set[str]:
+    keys = {str(current_user["uid"])}
+    profile = db.collection(USERS_COLLECTION).document(current_user["uid"]).get()
+    if profile.exists:
+        discord_id = (profile.to_dict() or {}).get("discord_id")
+        if discord_id:
+            keys.add(str(discord_id))
+    return keys
+
+
 def _extract_creator_uid(data: Dict[str, Any]) -> str:
     """Extract creator UID from either new format (created_by_uid) or legacy format (created_by.uid)."""
     if data.get("created_by_uid"):
         return str(data["created_by_uid"])
     created_by = data.get("created_by")
     if isinstance(created_by, dict):
-        return str(created_by.get("uid") or created_by.get("discord_id") or "")
+        if created_by.get("uid"):
+            return str(created_by["uid"])
+        discord_id = created_by.get("discord_id")
+        if discord_id:
+            profiles = (
+                db.collection(USERS_COLLECTION)
+                .where("discord_id", "==", str(discord_id))
+                .limit(1)
+                .get()
+            )
+            if profiles:
+                profile = profiles[0].to_dict() or {}
+                return str(
+                    profile.get("id") or profile.get("firebase_uid") or profiles[0].id
+                )
+            return str(discord_id)
     return str(created_by or "")
 
 
@@ -120,7 +153,7 @@ def _to_ticket_detail(doc_id: str, data: Dict[str, Any]) -> TicketDetail:
 def _to_ticket_message(msg_id: str, data: Dict[str, Any]) -> TicketMessage:
     return TicketMessage(
         id=msg_id,
-        sender_uid=data.get("sender_uid"),
+        sender_uid=data.get("sender_uid") or data.get("sender_id"),
         sender_role=data.get("sender_role") or SenderRole.USER,
         source=data.get("source") or MessageSource.WEB,
         content=data.get("content") or "",
@@ -130,36 +163,58 @@ def _to_ticket_message(msg_id: str, data: Dict[str, Any]) -> TicketMessage:
     )
 
 
-def _verify_ticket_access(ticket_data: Dict[str, Any], current_user: dict, is_admin: bool) -> None:
+def _verify_ticket_access(
+    ticket_data: Dict[str, Any], current_user: dict, is_admin: bool
+) -> None:
+    if is_admin:
+        return
     category = ticket_data.get("category") or TicketCategory.MISC.value
     creator_uid = _extract_creator_uid(ticket_data)
-    user_uid = current_user["uid"]
+    identities = _identity_keys(current_user)
 
     # Confidential tickets are only visible to creator and admins
     if category in HIDDEN_CATEGORIES:
-        if not is_admin and creator_uid != user_uid:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found.")
+        if not is_admin and creator_uid not in identities:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found."
+            )
         return
 
     # Regular tickets can be read by owner or admins
-    if not is_admin and creator_uid != user_uid:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found.")
+    if not is_admin and creator_uid not in identities:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found."
+        )
 
 
 # ---------------------------------------------------------------------------
 # Member & General Ticket Endpoints
 # ---------------------------------------------------------------------------
 
-@router.get("/my", response_model=TicketListResponse, summary="List tickets filed by the current member")
-def list_my_tickets(current_user: dict = Depends(get_current_user)) -> TicketListResponse:
+
+@router.get(
+    "/my",
+    response_model=TicketListResponse,
+    summary="List tickets filed by the current member",
+)
+def list_my_tickets(
+    current_user: dict = Depends(get_current_user),
+) -> TicketListResponse:
     """Fetch all tickets created by the authenticated member."""
     uid = current_user["uid"]
 
-    docs = (
-        db.collection(TICKETS_COLLECTION)
-        .where("created_by_uid", "==", uid)
-        .stream()
+    docs = list(
+        db.collection(TICKETS_COLLECTION).where("created_by_uid", "==", uid).stream()
     )
+    profile = db.collection(USERS_COLLECTION).document(uid).get()
+    discord_id = (profile.to_dict() or {}).get("discord_id") if profile.exists else None
+    if discord_id:
+        legacy_docs = (
+            db.collection(TICKETS_COLLECTION)
+            .where("created_by.discord_id", "==", str(discord_id))
+            .stream()
+        )
+        docs = list({doc.id: doc for doc in [*docs, *legacy_docs]}.values())
 
     tickets: List[TicketSummary] = []
     for doc in docs:
@@ -179,7 +234,9 @@ def get_ticket(
     """Get single ticket details. Restricted to owner or club admins."""
     doc = db.collection(TICKETS_COLLECTION).document(ticket_id).get()
     if not doc.exists:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found.")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found."
+        )
 
     data = doc.to_dict() or {}
     is_admin = is_admin_user(current_user)
@@ -188,7 +245,12 @@ def get_ticket(
     return _to_ticket_detail(doc.id, data)
 
 
-@router.post("", response_model=TicketDetail, status_code=status.HTTP_201_CREATED, summary="Create a new ticket")
+@router.post(
+    "",
+    response_model=TicketDetail,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create a new ticket",
+)
 def create_ticket(
     ticket_in: TicketCreate,
     current_user: dict = Depends(get_current_user),
@@ -217,10 +279,12 @@ def create_ticket(
         "updated_at": now,
     }
 
+    ticket_ref = db.collection(TICKETS_COLLECTION).document(ticket_id)
+    ticket_ref.set(ticket_doc)
+
     # Dispatch to YUVI Discord bot if configured to open a private Discord thread
     if settings.yuvi_bot_url and settings.bot_internal_secret:
         bot_payload = {
-            "action": "create_ticket_thread",
             "ticket_id": ticket_id,
             "category": ticket_in.category.value,
             "title": ticket_in.title,
@@ -229,7 +293,7 @@ def create_ticket(
         }
         try:
             req = urllib.request.Request(
-                f"{settings.yuvi_bot_url}/tickets/create-thread",
+                _bot_endpoint("/tickets/create-thread"),
                 data=json.dumps(bot_payload).encode("utf-8"),
                 headers={
                     "Content-Type": "application/json",
@@ -241,15 +305,19 @@ def create_ticket(
                 res_data = json.loads(resp.read().decode("utf-8"))
                 if res_data.get("discord_meta"):
                     ticket_doc["discord_meta"] = res_data["discord_meta"]
+                    ticket_ref.update({"discord_meta": res_data["discord_meta"]})
         except Exception:
             # Ticket creation continues even if Discord bot is temporarily unreachable
             pass
 
-    db.collection(TICKETS_COLLECTION).document(ticket_id).set(ticket_doc)
     return _to_ticket_detail(ticket_id, ticket_doc)
 
 
-@router.get("/{ticket_id}/messages", response_model=List[TicketMessage], summary="Fetch messages for a ticket thread")
+@router.get(
+    "/{ticket_id}/messages",
+    response_model=List[TicketMessage],
+    summary="Fetch messages for a ticket thread",
+)
 def get_ticket_messages(
     ticket_id: str,
     current_user: dict = Depends(get_current_user),
@@ -257,7 +325,9 @@ def get_ticket_messages(
     """Fetch chronological message thread for a ticket."""
     doc = db.collection(TICKETS_COLLECTION).document(ticket_id).get()
     if not doc.exists:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found.")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found."
+        )
 
     data = doc.to_dict() or {}
     is_admin = is_admin_user(current_user)
@@ -267,7 +337,7 @@ def get_ticket_messages(
         db.collection(TICKETS_COLLECTION)
         .document(ticket_id)
         .collection(MESSAGES_SUBCOLLECTION)
-        .order_by("timestamp")
+        .order_by("timestamp", direction=firestore.Query.DESCENDING)
         .limit(MAX_MESSAGES)
         .stream()
     )
@@ -276,10 +346,16 @@ def get_ticket_messages(
     for msg in stream:
         messages.append(_to_ticket_message(msg.id, msg.to_dict() or {}))
 
+    messages.reverse()
     return messages
 
 
-@router.post("/{ticket_id}/messages", response_model=TicketMessage, status_code=status.HTTP_201_CREATED, summary="Post a message to a ticket")
+@router.post(
+    "/{ticket_id}/messages",
+    response_model=TicketMessage,
+    status_code=status.HTTP_201_CREATED,
+    summary="Post a message to a ticket",
+)
 def post_ticket_message(
     ticket_id: str,
     message_in: TicketMessageCreate,
@@ -289,7 +365,9 @@ def post_ticket_message(
     doc_ref = db.collection(TICKETS_COLLECTION).document(ticket_id)
     doc = doc_ref.get()
     if not doc.exists:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found.")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found."
+        )
 
     data = doc.to_dict() or {}
     is_admin = is_admin_user(current_user)
@@ -328,7 +406,7 @@ def post_ticket_message(
         }
         try:
             req = urllib.request.Request(
-                f"{settings.yuvi_bot_url}/tickets/relay-message",
+                _bot_endpoint("/tickets/relay-message"),
                 data=json.dumps(relay_payload).encode("utf-8"),
                 headers={
                     "Content-Type": "application/json",
@@ -336,7 +414,7 @@ def post_ticket_message(
                 },
                 method="POST",
             )
-            with urllib.request.urlopen(req, timeout=3.0) as resp:
+            with urllib.request.urlopen(req, timeout=3.0):
                 pass
         except Exception:
             pass
@@ -344,7 +422,9 @@ def post_ticket_message(
     return _to_ticket_message(msg_id, msg_doc)
 
 
-@router.post("/{ticket_id}/close", response_model=TicketDetail, summary="Close a ticket")
+@router.post(
+    "/{ticket_id}/close", response_model=TicketDetail, summary="Close a ticket"
+)
 def close_ticket(
     ticket_id: str,
     payload: TicketCloseRequest,
@@ -354,7 +434,9 @@ def close_ticket(
     doc_ref = db.collection(TICKETS_COLLECTION).document(ticket_id)
     doc = doc_ref.get()
     if not doc.exists:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found.")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found."
+        )
 
     data = doc.to_dict() or {}
     is_admin = is_admin_user(current_user)
@@ -378,12 +460,21 @@ def close_ticket(
 # Admin & Staff Endpoints
 # ---------------------------------------------------------------------------
 
-@router.get("", response_model=TicketListResponse, summary="Search and filter all tickets (Admin only)")
+
+@router.get(
+    "",
+    response_model=TicketListResponse,
+    summary="Search and filter all tickets (Admin only)",
+)
 def list_all_tickets(
     category: Optional[TicketCategory] = Query(None, description="Filter by category"),
-    status_filter: Optional[TicketStatus] = Query(None, alias="status", description="Filter by status"),
+    status_filter: Optional[TicketStatus] = Query(
+        None, alias="status", description="Filter by status"
+    ),
     priority: Optional[TicketPriority] = Query(None, description="Filter by priority"),
-    assigned_to_uid: Optional[str] = Query(None, description="Filter by assigned lead UID"),
+    assigned_to_uid: Optional[str] = Query(
+        None, description="Filter by assigned lead UID"
+    ),
     spg_id: Optional[str] = Query(None, description="Filter by linked SPG ID"),
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(20, ge=1, le=100, description="Items per page"),
@@ -421,7 +512,11 @@ def list_all_tickets(
     return TicketListResponse(total=total, items=items)
 
 
-@router.patch("/{ticket_id}/priority", response_model=TicketDetail, summary="Change ticket priority (Admin only)")
+@router.patch(
+    "/{ticket_id}/priority",
+    response_model=TicketDetail,
+    summary="Change ticket priority (Admin only)",
+)
 def update_ticket_priority(
     ticket_id: str,
     payload: AdminUpdateTicketPriority,
@@ -431,19 +526,27 @@ def update_ticket_priority(
     doc_ref = db.collection(TICKETS_COLLECTION).document(ticket_id)
     doc = doc_ref.get()
     if not doc.exists:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found.")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found."
+        )
 
     now = now_iso()
-    doc_ref.update({
-        "priority": payload.priority.value,
-        "updated_at": now,
-    })
+    doc_ref.update(
+        {
+            "priority": payload.priority.value,
+            "updated_at": now,
+        }
+    )
 
     refreshed = doc_ref.get().to_dict() or {}
     return _to_ticket_detail(ticket_id, refreshed)
 
 
-@router.patch("/{ticket_id}/status", response_model=TicketDetail, summary="Update ticket status (Admin only)")
+@router.patch(
+    "/{ticket_id}/status",
+    response_model=TicketDetail,
+    summary="Update ticket status (Admin only)",
+)
 def update_ticket_status(
     ticket_id: str,
     payload: AdminUpdateTicketStatus,
@@ -453,7 +556,9 @@ def update_ticket_status(
     doc_ref = db.collection(TICKETS_COLLECTION).document(ticket_id)
     doc = doc_ref.get()
     if not doc.exists:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found.")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found."
+        )
 
     now = now_iso()
     updates: Dict[str, Any] = {
@@ -472,7 +577,11 @@ def update_ticket_status(
     return _to_ticket_detail(ticket_id, refreshed)
 
 
-@router.patch("/{ticket_id}/assign", response_model=TicketDetail, summary="Assign ticket to a staff lead (Admin only)")
+@router.patch(
+    "/{ticket_id}/assign",
+    response_model=TicketDetail,
+    summary="Assign ticket to a staff lead (Admin only)",
+)
 def assign_ticket(
     ticket_id: str,
     payload: AdminAssignTicket,
@@ -482,7 +591,9 @@ def assign_ticket(
     doc_ref = db.collection(TICKETS_COLLECTION).document(ticket_id)
     doc = doc_ref.get()
     if not doc.exists:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found.")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found."
+        )
 
     data = doc.to_dict() or {}
     now = now_iso()
@@ -499,7 +610,9 @@ def assign_ticket(
     return _to_ticket_detail(ticket_id, refreshed)
 
 
-@router.get("/{ticket_id}/transcript", summary="Export markdown chat transcript (Admin only)")
+@router.get(
+    "/{ticket_id}/transcript", summary="Export markdown chat transcript (Admin only)"
+)
 def export_ticket_transcript(
     ticket_id: str,
     admin: dict = Depends(get_admin_user),
@@ -507,7 +620,9 @@ def export_ticket_transcript(
     """Export complete markdown transcript of ticket details and chat conversation."""
     doc = db.collection(TICKETS_COLLECTION).document(ticket_id).get()
     if not doc.exists:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found.")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found."
+        )
 
     data = doc.to_dict() or {}
     stream = (
@@ -553,25 +668,39 @@ def export_ticket_transcript(
 # Discord Bot Real-Time Sync Webhook
 # ---------------------------------------------------------------------------
 
-@router.post("/internal/bot-sync/{ticket_id}", summary="Webhook for YUVI bot to sync messages in real time")
+
+@router.post(
+    "/internal/bot-sync/{ticket_id}",
+    summary="Webhook for YUVI bot to sync messages in real time",
+)
 def bot_sync_message(
     ticket_id: str,
     payload: BotSyncMessageRequest,
     x_internal_secret: Optional[str] = Header(None, alias="X-Internal-Secret"),
 ):
     """Internal webhook called by YUVI bot when a Discord thread message is created."""
-    if not settings.bot_internal_secret or x_internal_secret != settings.bot_internal_secret:
+    if (
+        not settings.bot_internal_secret
+        or not x_internal_secret
+        or not secrets.compare_digest(x_internal_secret, settings.bot_internal_secret)
+    ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or missing internal sync secret."
+            detail="Invalid or missing internal sync secret.",
         )
 
     doc_ref = db.collection(TICKETS_COLLECTION).document(ticket_id)
     if not doc_ref.get().exists:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found.")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found."
+        )
 
     now = payload.timestamp or now_iso()
-    msg_id = f"msg_{uuid.uuid4().hex[:10]}"
+    if payload.discord_message_id:
+        digest = hashlib.sha256(payload.discord_message_id.encode("utf-8")).hexdigest()
+        msg_id = f"msg_discord_{digest[:24]}"
+    else:
+        msg_id = f"msg_{uuid.uuid4().hex[:10]}"
 
     msg_doc = {
         "id": msg_id,
