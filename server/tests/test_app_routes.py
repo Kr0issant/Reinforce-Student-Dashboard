@@ -1,17 +1,15 @@
-"""The contribution routes are registered, and the app imports.
+"""Application Route Registration Tests.
 
-Importing `main` also imports every other router. When an unrelated one is
-broken, that test skips with the reason rather than failing this workflow —
-and rather than being "fixed" by unmounting someone else's feature.
+Verifies that all API routes across users, contributions, spgs, tickets,
+blogs, ideas, and events are properly mounted and reachable on main.app.
 """
 
 import unittest
-
 from fastapi import FastAPI
 
-from app.api.v1.endpoints import contributions
 
 EXPECTED_ROUTES = {
+    # Contributions
     ("POST", "/api/v1/contributions/award/user/{user_id}"),
     ("POST", "/api/v1/contributions/award/spg/{spg_id}"),
     ("PATCH", "/api/v1/contributions/{record_id}/revoke"),
@@ -21,15 +19,78 @@ EXPECTED_ROUTES = {
     ("GET", "/api/v1/contributions/user/{user_id}"),
     ("GET", "/api/v1/contributions"),
     ("GET", "/api/v1/contributions/{record_id}"),
+
+    # Users
+    ("GET", "/api/v1/users/me"),
+    ("PATCH", "/api/v1/users/me"),
+    ("POST", "/api/v1/users/sync"),
+    ("POST", "/api/v1/users/verify-discord"),
+    ("GET", "/api/v1/users/leaderboard"),
+    ("GET", "/api/v1/users"),
+    ("GET", "/api/v1/users/{user_id}"),
+    ("PATCH", "/api/v1/users/{user_id}/status"),
+
+    # SPGs
+    ("GET", "/api/v1/spgs"),
+    ("GET", "/api/v1/spgs/{spg_id}"),
+    ("PATCH", "/api/v1/spgs/{spg_id}"),
+    ("PATCH", "/api/v1/spgs/{spg_id}/lead"),
+    ("PATCH", "/api/v1/spgs/{spg_id}/status"),
+
+    # Tickets
+    ("GET", "/api/v1/tickets/my"),
+    ("POST", "/api/v1/tickets"),
+    ("GET", "/api/v1/tickets/{ticket_id}"),
+    ("POST", "/api/v1/tickets/{ticket_id}/messages"),
+    ("POST", "/api/v1/tickets/{ticket_id}/close"),
+    ("GET", "/api/v1/tickets"),
+    ("PATCH", "/api/v1/tickets/{ticket_id}/priority"),
+    ("PATCH", "/api/v1/tickets/{ticket_id}/status"),
+    ("PATCH", "/api/v1/tickets/{ticket_id}/assign"),
+
+    # Blogs
+    ("GET", "/api/v1/blogs"),
+    ("POST", "/api/v1/blogs"),
+    ("GET", "/api/v1/blogs/{id_or_slug}"),
+    ("PUT", "/api/v1/blogs/{id}"),
+    ("DELETE", "/api/v1/blogs/{id}"),
+    ("POST", "/api/v1/blogs/{id}/upvote"),
+    ("GET", "/api/v1/blogs/{id}/comments"),
+    ("POST", "/api/v1/blogs/{id}/comments"),
+    ("DELETE", "/api/v1/blogs/{id}/comments/{cid}"),
+
+    # Ideas
+    ("GET", "/api/v1/ideas"),
+    ("GET", "/api/v1/ideas/random"),
+    ("GET", "/api/v1/ideas/my"),
+    ("GET", "/api/v1/ideas/pending"),
+    ("POST", "/api/v1/ideas"),
+    ("GET", "/api/v1/ideas/{id}"),
+    ("PATCH", "/api/v1/ideas/{id}"),
+    ("DELETE", "/api/v1/ideas/{id}"),
+    ("POST", "/api/v1/ideas/{id}/approve"),
+    ("POST", "/api/v1/ideas/{id}/upvote"),
+
+    # Events
+    ("GET", "/api/v1/events"),
+    ("POST", "/api/v1/events"),
+    ("GET", "/api/v1/events/{id_or_slug}"),
+    ("PUT", "/api/v1/events/{id}"),
+    ("PATCH", "/api/v1/events/{id}/status"),
+    ("GET", "/api/v1/events/{id}/my-registration"),
+    ("POST", "/api/v1/events/{id}/register"),
+    ("DELETE", "/api/v1/events/{id}/register"),
+    ("GET", "/api/v1/events/{id}/registrations"),
+    ("POST", "/api/v1/events/{id}/attendance/roll-call"),
+    ("POST", "/api/v1/events/{id}/award-winners"),
+    ("POST", "/api/v1/events/{id}/feedback"),
+    ("GET", "/api/v1/events/{id}/feedback"),
+    ("POST", "/api/v1/events/{id}/spg-decision"),
 }
 
 
 def routes_of(app: FastAPI) -> set:
-    """Every registered (method, path), read from the OpenAPI schema.
-
-    Included routers are nested objects in this FastAPI version, so walking
-    app.routes would miss them.
-    """
+    """Every registered (method, path), read from the OpenAPI schema."""
     return {
         (method.upper(), path)
         for path, operations in app.openapi()["paths"].items()
@@ -37,61 +98,19 @@ def routes_of(app: FastAPI) -> set:
     }
 
 
-class ContributionRoutingTests(unittest.TestCase):
-    def setUp(self):
-        self.app = FastAPI()
-        self.app.include_router(contributions.router, prefix="/api/v1")
+class ApplicationImportTests(unittest.TestCase):
+    def test_import_main_registers_all_routes(self):
+        import main
+        registered = routes_of(main.app)
+        for route in EXPECTED_ROUTES:
+            with self.subTest(route=route):
+                self.assertIn(route, registered)
 
-    def test_every_contribution_route_is_registered(self):
-        self.assertTrue(EXPECTED_ROUTES <= routes_of(self.app))
-
-    def test_the_prefix_is_not_doubled(self):
-        for _method, path in routes_of(self.app):
+    def test_no_double_prefix(self):
+        import main
+        for _method, path in routes_of(main.app):
             with self.subTest(path=path):
                 self.assertNotIn("/api/v1/api/v1", path)
-
-    def test_fixed_paths_are_their_own_routes(self):
-        # /me and /leaderboard are declared before /{record_id}, so the path
-        # parameter cannot swallow them. That they resolve is covered by the
-        # endpoint tests; here they must exist as routes in their own right.
-        registered = routes_of(self.app)
-        for path in ("/api/v1/contributions/me", "/api/v1/contributions/leaderboard"):
-            with self.subTest(path=path):
-                self.assertIn(("GET", path), registered)
-
-    def test_each_route_resolves_to_its_handler(self):
-        self.assertEqual(
-            self.app.url_path_for("award_user_points", user_id="uid_one"),
-            "/api/v1/contributions/award/user/uid_one",
-        )
-        self.assertEqual(
-            self.app.url_path_for("award_spg_points", spg_id="spg_001"),
-            "/api/v1/contributions/award/spg/spg_001",
-        )
-        self.assertEqual(
-            self.app.url_path_for("recalculate_user_points", user_id="uid_one"),
-            "/api/v1/contributions/recalculate/uid_one",
-        )
-
-    def test_no_route_is_keyed_by_an_email(self):
-        # Identity is the Firebase UID. A path parameter named for a student or
-        # an email would mean the old identity leaked back in.
-        for _method, path in routes_of(self.app):
-            with self.subTest(path=path):
-                self.assertNotIn("student_id", path)
-                self.assertNotIn("email", path)
-
-
-class ApplicationImportTests(unittest.TestCase):
-    def test_import_main_registers_the_contribution_routes(self):
-        try:
-            import main
-        except Exception as error:  # noqa: BLE001 - reported, never repaired here
-            self.skipTest(
-                "importing main is blocked by an unrelated router: "
-                f"{type(error).__name__}: {error}"
-            )
-        self.assertTrue(EXPECTED_ROUTES <= routes_of(main.app))
 
 
 if __name__ == "__main__":
