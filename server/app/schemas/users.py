@@ -40,6 +40,7 @@ class UserBase(BaseModel):
     email: EmailStr
     avatar_url: Optional[str] = None
     bio: Optional[str] = Field(default=None, max_length=1000)
+    batch_year: Optional[int] = Field(default=None, ge=1, le=5)
     skills: List[str] = Field(default_factory=list, max_length=30)
     social_links: SocialLinks = Field(default_factory=SocialLinks)
 
@@ -59,6 +60,7 @@ class UserUpdateRequest(BaseModel):
     full_name: Optional[str] = Field(default=None, min_length=1, max_length=100)
     avatar_url: Optional[str] = None
     bio: Optional[str] = Field(default=None, max_length=1000)
+    batch_year: Optional[int] = Field(default=None, ge=1, le=5)
     skills: Optional[List[str]] = Field(default=None, max_length=30)
     social_links: Optional[SocialLinks] = None
 
@@ -92,6 +94,7 @@ class UserDocument(BaseModel):
     is_admin: bool = False
     is_member: bool = False
     tier: MemberTier = MemberTier.BEGINNER
+    batch_year: Optional[int] = None
     is_verified: bool = False
     verified_at: Optional[str] = None
     points: TrackPoints = Field(default_factory=TrackPoints)
@@ -111,6 +114,7 @@ class UserPublicResponse(BaseModel):
     bio: Optional[str] = None
     is_member: bool = False
     tier: MemberTier = MemberTier.BEGINNER
+    batch_year: Optional[int] = None
     is_verified: bool = False
     skills: List[str] = Field(default_factory=list)
     social_links: SocialLinks = Field(default_factory=SocialLinks)
@@ -127,6 +131,7 @@ class UserMeResponse(BaseModel):
     is_admin: bool = False
     is_member: bool = False
     tier: MemberTier = MemberTier.BEGINNER
+    batch_year: Optional[int] = None
     is_verified: bool = False
     verified_at: Optional[str] = None
     points: TrackPoints = Field(default_factory=TrackPoints)

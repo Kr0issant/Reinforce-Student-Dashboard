@@ -61,6 +61,7 @@ def _to_user_me(uid: str, data: Dict[str, Any]) -> UserMeResponse:
         is_admin=bool(data.get("is_admin", False)),
         is_member=bool(data.get("is_member", False)),
         tier=data.get("tier") or MemberTier.BEGINNER,
+        batch_year=data.get("batch_year"),
         is_verified=bool(data.get("is_verified", False)),
         verified_at=data.get("verified_at"),
         points=points,
@@ -92,6 +93,7 @@ def _to_user_public(uid: str, data: Dict[str, Any]) -> UserPublicResponse:
         bio=data.get("bio"),
         is_member=bool(data.get("is_member", False)),
         tier=data.get("tier") or MemberTier.BEGINNER,
+        batch_year=data.get("batch_year"),
         is_verified=bool(data.get("is_verified", False)),
         skills=data.get("skills") or [],
         social_links=social_links,
@@ -174,6 +176,8 @@ def update_me(
         updates["bio"] = payload.bio.strip()
     if payload.skills is not None:
         updates["skills"] = [s.strip() for s in payload.skills if s.strip()]
+    if payload.batch_year is not None:
+        updates["batch_year"] = payload.batch_year
     if payload.social_links is not None:
         updates["social_links"] = payload.social_links.model_dump()
 
