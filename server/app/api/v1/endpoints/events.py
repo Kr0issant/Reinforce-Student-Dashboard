@@ -846,7 +846,7 @@ def event_spg_decision(
 
 # --- Admin Management Endpoints ---
 
-
+# Umm no Slash??
 @router.post("", response_model=EventDocument, status_code=status.HTTP_201_CREATED)
 def create_event(
     payload: EventCreate,

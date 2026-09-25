@@ -5,7 +5,7 @@ Includes schedule, eligibility, solo/team participation, event-specific SPGs,
 attendance roll-call, competition awarding, and feedback collection.
 Strictly follows zero user denormalization (pure UID references).
 """
-
+# Validated Need Some Changes and Discussion along the Comemnted Points
 from datetime import timezone
 from enum import Enum
 from typing import Annotated, List, Optional
@@ -26,7 +26,12 @@ UtcDatetime = Annotated[
     PlainSerializer(lambda value: value.isoformat(), return_type=str, when_used="json"),
 ]
 
-
+# Do Event Type Really Need to be Stored like This?
+# If we are to Store them it should probably follow a model like this 
+# We Make an Event Type Model with a nameStr and any other details a event type needs Maybe some hardcoded color/ icons etc.
+# any Event We Want to Add Later would ideally not affect the codebase or schema 
+# Keeping it as an ENUM is limiting
+# The Question is not about if we need any more event idea but the system should be able to plan alongside it 
 class EventType(str, Enum):
     ORIENTATION = "orientation"
     WORKSHOP = "workshop"
@@ -45,7 +50,7 @@ class EventType(str, Enum):
     QUIZ_CONTEST = "quiz_contest"
     GENERAL_MEET = "general_meet"
 
-
+# Having Event Track is Fine i guess
 class EventTrack(str, Enum):
     RESEARCH = "research"
     PRODUCT = "product"
@@ -85,7 +90,7 @@ class RegistrationStatus(str, Enum):
     CHECKED_IN = "checked_in"
     CANCELLED = "cancelled"
 
-
+# Umm Should Event SPGS need to be Defined Here Separately? I dont think so everything related to SPGs must be covered under SPGs
 class EventSPGStatus(str, Enum):
     ACTIVE_COMPETITION = "active_competition"
     CONVERTED_PERMANENT = "converted_permanent"
@@ -217,7 +222,7 @@ class EventStatusUpdate(BaseModel):
 
     status: EventStatus
 
-
+# We Also Need Event Banner With a Firestore Link ideally 
 class EventDocument(BaseModel):
     """Full Event document schema stored in Firestore."""
 
@@ -318,7 +323,10 @@ class RollCallResponse(BaseModel):
     awarded_uids: List[str]
     failed_uids: List[str] = Field(default_factory=list)
 
-
+# What are these Points About? 
+# Are they Related to Contribution Scores?
+# Actaully What Is this about Winners Actually
+# Will these Be Used for Automated Contribution points? Probably right
 class WinnerAwardEntry(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

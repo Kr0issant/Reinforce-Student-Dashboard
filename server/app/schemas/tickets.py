@@ -18,6 +18,11 @@ from app.schemas.common import DescriptionStr, NonBlankStr, TitleStr
 # Enums
 # ---------------------------------------------------------------------------
 
+# Ohk to Resource Request is a Bit Ambiguous here
+# It can mean GPU Resource Rest or HArdware Requests
+# It can also mean Learning Resource Request 
+# Can we have a Categorization for both of these
+# Also Maybe add a Suggestion Box
 class TicketCategory(str, Enum):
     SPG_REGISTRATION = "spg_registration"
     RESOURCE_REQUEST = "resource_request"

@@ -193,7 +193,11 @@ class SPGCreate(SPGRegistrationRequest):
             raise ValueError("a project SPG requires a proposition document")
         return self
 
-
+# SPGs Might Need to Update Teams after Creation 
+# An SPG update should Include Changing team Members too
+# Albeit It might need a Different Update Step and different Validation points
+# Another Things is Applying to SPGs, If Someone wants to work on the same problem as other people already on it they should be able to apply to them if they are open to invitation 
+# Open to Invitation can be yet another Field That needs to be added 
 class SPGUpdate(BaseModel):
     """Metadata an admin may edit in place.
 
@@ -234,3 +238,5 @@ class SPGPage(BaseModel):
 
     items: List[SPGResponse] = Field(default_factory=list)
     next_cursor: Optional[NonBlankStr] = None
+
+

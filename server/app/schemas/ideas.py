@@ -18,6 +18,9 @@ from app.schemas.common import DescriptionStr, NonBlankStr, TitleStr
 # Enums
 # ---------------------------------------------------------------------------
 
+# Ideas should have 2 types 
+# First should be Open to All type (as the Name suggests) We can have it redirect to SPGs Already running this Idea or Create and SPG Button for it
+# Second should be Recruitment Ideas, Say Someone wasnt to build something temselves but need i Team they can post it on the Idea Jar This Should be Affiliated with an SPG and needs to have an apply button
 class IdeaTrack(str, Enum):
     RESEARCH = "research"
     PRODUCT = "product"
@@ -57,7 +60,8 @@ class IdeaUpvoteToggleResponse(BaseModel):
 # ---------------------------------------------------------------------------
 # Ingestion / Mutation Schemas
 # ---------------------------------------------------------------------------
-
+# Idea Prerequisites, Rough Roadmap and Learning outcomes should Ideally be Optional for the First Submit.
+# Can be Edited Later though
 class IdeaCreate(BaseModel):
     """Payload to submit a new idea."""
     model_config = ConfigDict(extra="forbid")
